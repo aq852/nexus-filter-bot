@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
@@ -8,6 +9,7 @@ from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.filters import Command, CommandObject
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from bson import ObjectId
+from pymongo import ReturnDocument
 
 from .config import Settings, get_settings
 from .database import Database
@@ -30,7 +32,8 @@ def panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📩 Open requests", callback_data="panel:requests"),
          InlineKeyboardButton(text="🔎 Top searches", callback_data="panel:searches")],
         [InlineKeyboardButton(text="📣 Broadcast help", callback_data="panel:broadcast"),
-         InlineKeyboardButton(text="🛡 User controls", callback_data="panel:users")],
+         InlineKeyboardButton(text="🗓 Schedules", callback_data="panel:schedules")],
+        [InlineKeyboardButton(text="🛡 User controls", callback_data="panel:users")],
         [InlineKeyboardButton(text="✕ Close", callback_data="panel:close")],
     ])
 
@@ -201,7 +204,14 @@ async def owner_panel_action(callback: CallbackQuery) -> None:
         details = "\n".join(f"• {item['query']} — <b>{item['count']}</b>" for item in searches)
         text = f"<b>Top searches</b>\n{details or 'No searches recorded yet.'}"
     elif action == "broadcast":
-        text = "<b>Broadcast</b>\n\nSend <code>/broadcast Your message here</code>. The bot delivers it to every user who has started it."
+        text = "<b>Broadcast</b>\n\nSend <code>/broadcast Your message here</code> to deliver immediately.\n\nSchedule: <code>/schedule YYYY-MM-DD HH:MM | Your message</code>"
+    elif action == "schedules":
+        schedules = await db.db.scheduled_broadcasts.find({"status": "pending"}).sort("due_at", 1).to_list(length=15)
+        local_zone = ZoneInfo(settings.timezone)
+        details = "\n".join(
+            f"• <code>{item['_id']}</code> — {item['due_at'].astimezone(local_zone):%d %b %Y, %I:%M %p}" for item in schedules
+        )
+        text = f"<b>Scheduled broadcasts</b>\n{details or 'No messages scheduled.'}\n\nCancel: <code>/cancelschedule SCHEDULE_ID</code>"
     else:
         text = "<b>User controls</b>\n\nBan: <code>/ban USER_ID</code>\nUnban: <code>/unban USER_ID</code>\n\nBanned users cannot search."
     await callback.message.edit_text(text, reply_markup=panel_keyboard())
@@ -455,15 +465,89 @@ async def broadcast(message: Message, command: CommandObject) -> None:
     if not text:
         await message.answer("Usage: <code>/broadcast Your message</code>")
         return
+    sent, failed = await deliver_broadcast(message.bot, text)
+    await message.answer(f"<b>Broadcast complete</b>\nSent: {sent}\nFailed: {failed}")
+
+
+async def deliver_broadcast(bot: Bot, text: str) -> tuple[int, int]:
     sent = failed = 0
     async for user in db.db.users.find({"banned": {"$ne": True}}):
         try:
-            await message.bot.send_message(user["user_id"], text)
+            await bot.send_message(user["user_id"], text)
             sent += 1
         except Exception:
             failed += 1
         await asyncio.sleep(0.04)
-    await message.answer(f"<b>Broadcast complete</b>\nSent: {sent}\nFailed: {failed}")
+    return sent, failed
+
+
+@router.message(Command("schedule"))
+async def schedule_broadcast(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        when, text = (command.args or "").split("|", 1)
+        local_time = datetime.strptime(when.strip(), "%Y-%m-%d %H:%M").replace(tzinfo=ZoneInfo(settings.timezone))
+        text = text.strip()
+        if not text or local_time <= datetime.now(ZoneInfo(settings.timezone)):
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/schedule 2026-09-03 18:30 | Your message</code>\nTime uses your configured timezone.")
+        return
+    result = await db.db.scheduled_broadcasts.insert_one({
+        "text": text,
+        "due_at": local_time.astimezone(timezone.utc),
+        "status": "pending",
+        "created_at": datetime.now(timezone.utc),
+    })
+    await message.answer(f"✅ Scheduled for <b>{local_time:%d %b %Y, %I:%M %p}</b>.\nID: <code>{result.inserted_id}</code>")
+
+
+@router.message(Command("schedules"))
+async def list_schedules(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    schedules = await db.db.scheduled_broadcasts.find({"status": "pending"}).sort("due_at", 1).to_list(length=30)
+    local_zone = ZoneInfo(settings.timezone)
+    details = "\n".join(f"• <code>{item['_id']}</code> — {item['due_at'].astimezone(local_zone):%d %b %Y, %I:%M %p}" for item in schedules)
+    await message.answer(f"<b>Scheduled broadcasts</b>\n{details or 'No messages scheduled.'}")
+
+
+@router.message(Command("cancelschedule"))
+async def cancel_schedule(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        schedule_id = ObjectId(command.args or "")
+    except Exception:
+        await message.answer("Usage: <code>/cancelschedule SCHEDULE_ID</code>")
+        return
+    result = await db.db.scheduled_broadcasts.update_one(
+        {"_id": schedule_id, "status": "pending"}, {"$set": {"status": "cancelled", "cancelled_at": datetime.now(timezone.utc)}}
+    )
+    await message.answer("✅ Scheduled broadcast cancelled." if result.modified_count else "That pending schedule was not found.")
+
+
+async def scheduled_broadcast_worker(bot: Bot) -> None:
+    while True:
+        now = datetime.now(timezone.utc)
+        schedule = await db.db.scheduled_broadcasts.find_one_and_update(
+            {"status": "pending", "due_at": {"$lte": now}},
+            {"$set": {"status": "sending", "started_at": now}},
+            sort=[("due_at", 1)],
+            return_document=ReturnDocument.AFTER,
+        )
+        if schedule:
+            sent, failed = await deliver_broadcast(bot, schedule["text"])
+            await db.db.scheduled_broadcasts.update_one(
+                {"_id": schedule["_id"]},
+                {"$set": {"status": "sent", "sent_at": datetime.now(timezone.utc), "sent_count": sent, "failed_count": failed}},
+            )
+            try:
+                await bot.send_message(settings.owner_id, f"✅ Scheduled broadcast sent.\nSent: {sent}\nFailed: {failed}")
+            except Exception:
+                pass
+        await asyncio.sleep(20)
 
 
 @router.callback_query(F.data.startswith("page:"))
@@ -576,9 +660,12 @@ async def main() -> None:
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
+    scheduler = asyncio.create_task(scheduled_broadcast_worker(bot))
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
+        scheduler.cancel()
+        await asyncio.gather(scheduler, return_exceptions=True)
         await db.close()
         await bot.session.close()
 

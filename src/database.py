@@ -22,6 +22,7 @@ class Database:
         await self.db.searches.create_index("query", unique=True)
         await self.db.keyword_filters.create_index([("chat_id", 1), ("keyword", 1)], unique=True)
         await self.db.blacklist.create_index([("chat_id", 1), ("word", 1)], unique=True)
+        await self.db.scheduled_broadcasts.create_index([("status", 1), ("due_at", 1)])
 
     async def close(self) -> None:
         self.client.close()
