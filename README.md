@@ -52,7 +52,11 @@ Set `STORAGE_CHANNEL_ID` to an owner-controlled channel where the bot is an admi
 
 Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.
 
-Group-admin commands: `/setwelcome`, `/clearwelcome`, `/setrules`, `/rules`, `/filter`, `/stopfilter`, `/blacklist`, `/unblacklist`, `/antispam on|off`, and `/disable` or `/enable`.
+Group-admin commands: `/settings`, `/setwelcome`, `/clearwelcome`, `/setrules`, `/rules`, `/filter`, `/stopfilter`, `/blacklist`, `/unblacklist`, `/antispam on|off`, and `/disable` or `/enable`.
+
+## Group settings panel
+
+Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
 
 ## Request fulfilment
 

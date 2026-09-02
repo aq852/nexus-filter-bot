@@ -76,6 +76,37 @@ async def require_group_admin(message: Message) -> bool:
     return False
 
 
+async def callback_is_group_admin(callback: CallbackQuery) -> bool:
+    if is_owner(callback.from_user.id):
+        return True
+    try:
+        member = await callback.bot.get_chat_member(callback.message.chat.id, callback.from_user.id)
+        return member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+    except Exception:
+        return False
+
+
+def group_settings_keyboard(group: dict) -> InlineKeyboardMarkup:
+    search_label = "✅ Search enabled" if not group.get("disabled") else "⛔ Search disabled"
+    spam_label = "🛡 Anti-spam on" if group.get("anti_spam") else "🛡 Anti-spam off"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=search_label, callback_data="groupset:search"),
+         InlineKeyboardButton(text=spam_label, callback_data="groupset:spam")],
+        [InlineKeyboardButton(text="📜 View rules", callback_data="groupset:rules"),
+         InlineKeyboardButton(text="ℹ️ Help", callback_data="groupset:help")],
+        [InlineKeyboardButton(text="✕ Close", callback_data="groupset:close")],
+    ])
+
+
+def group_settings_text(group: dict) -> str:
+    return (
+        "<b>Group settings</b>\n\n"
+        f"Search: <b>{'disabled' if group.get('disabled') else 'enabled'}</b>\n"
+        f"Anti-spam: <b>{'on' if group.get('anti_spam') else 'off'}</b>\n"
+        "\nOnly group administrators can change these settings."
+    )
+
+
 FILTERS = (("🎬 Video", "video"), ("📚 Books", "book"), ("🛠 Tools", "tool"), ("🎵 Audio", "audio"), ("📄 Other", "file"))
 
 
@@ -389,6 +420,43 @@ async def set_welcome(message: Message, command: CommandObject) -> None:
         return
     await db.db.groups.update_one({"chat_id": message.chat.id}, {"$set": {"welcome_message": text}}, upsert=True)
     await message.answer("✅ Welcome message saved. Use <code>{name}</code> and <code>{group}</code> as placeholders.")
+
+
+@router.message(Command("settings"))
+async def group_settings(message: Message) -> None:
+    if not await require_group_admin(message):
+        return
+    group = await db.db.groups.find_one({"chat_id": message.chat.id}) or {}
+    await message.answer(group_settings_text(group), reply_markup=group_settings_keyboard(group))
+
+
+@router.callback_query(F.data.startswith("groupset:"))
+async def group_settings_action(callback: CallbackQuery) -> None:
+    if not await callback_is_group_admin(callback):
+        await callback.answer("Only this group's administrators can use these controls.", show_alert=True)
+        return
+    action = callback.data.split(":", 1)[1]
+    chat_id = callback.message.chat.id
+    if action == "close":
+        await callback.message.delete()
+        await callback.answer()
+        return
+    group = await db.db.groups.find_one({"chat_id": chat_id}) or {}
+    if action == "search":
+        group["disabled"] = not group.get("disabled", False)
+        await db.db.groups.update_one({"chat_id": chat_id}, {"$set": {"disabled": group["disabled"]}}, upsert=True)
+    elif action == "spam":
+        group["anti_spam"] = not group.get("anti_spam", False)
+        await db.db.groups.update_one({"chat_id": chat_id}, {"$set": {"anti_spam": group["anti_spam"]}}, upsert=True)
+    elif action == "rules":
+        await callback.answer(group.get("rules") or "No rules have been set yet.", show_alert=True)
+        return
+    elif action == "help":
+        await callback.answer("Use /setwelcome, /setrules, /filter, /blacklist, or /settings to manage this group.", show_alert=True)
+        return
+    updated_group = await db.db.groups.find_one({"chat_id": chat_id}) or {}
+    await callback.message.edit_text(group_settings_text(updated_group), reply_markup=group_settings_keyboard(updated_group))
+    await callback.answer("Settings updated.")
 
 
 @router.message(Command("clearwelcome"))
