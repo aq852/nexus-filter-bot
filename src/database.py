@@ -35,8 +35,8 @@ class Database:
             {"chat_id": chat_id}, {"$set": {"title": title, "added_at": datetime.now(timezone.utc)}}, upsert=True
         )
 
-    async def upsert_file(self, record: dict) -> None:
-        await self.db.files.update_one(
+    async def upsert_file(self, record: dict):
+        return await self.db.files.update_one(
             {"source_chat_id": record["source_chat_id"], "source_message_id": record["source_message_id"]},
             {"$set": record},
             upsert=True,

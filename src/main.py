@@ -156,6 +156,28 @@ async def delete_later(message: Message) -> None:
             pass
 
 
+async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
+    """Publish a compact update only when a file is first added to the index."""
+    if not settings.updates_channel_id:
+        return
+    tags = " ".join(f"#{tag}" for tag in record.get("tags", [])[:8])
+    caption_preview = record.get("caption", "").strip()[:250]
+    text = f"<b>New in Nexus</b>\n\n{record['kind']} <b>{record['name']}</b>"
+    if caption_preview:
+        text += f"\n\n{caption_preview}"
+    if tags:
+        text += f"\n\n{tags}"
+    keyboard = None
+    if bot_username:
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="🔎 Open in NexusFilterBot", url=f"https://t.me/{bot_username}?start=file_{file_id}")
+        ]])
+    try:
+        await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
+    except Exception as error:
+        logging.warning("Could not publish new-file announcement: %s", error)
+
+
 async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None, category: str | None = None) -> None:
     clean_query = normalize_query(query)
     language = await user_language(user_id)
@@ -425,13 +447,15 @@ async def index_channel_file(message: Message) -> None:
         "search_text": normalize_query(f"{name or ''} {caption}"),
         "created_at": datetime.now(timezone.utc),
     }
-    await db.upsert_file(record)
+    index_result = await db.upsert_file(record)
     stored_file = await db.db.files.find_one(
         {"source_chat_id": message.chat.id, "source_message_id": message.message_id}, {"_id": 1}
     )
     if not stored_file:
         return
     stored_file_id = str(stored_file["_id"])
+    if index_result.upserted_id:
+        await announce_new_file(message.bot, record, stored_file_id)
     matching_requests = await db.matching_requests(record["search_text"])
     for request in matching_requests:
         requester_ids = request.get("requesters") or ([request["user_id"]] if request.get("user_id") else [])
@@ -486,7 +510,12 @@ async def owner_upload_inbox(message: Message) -> None:
         "search_text": normalize_query(f"{name or ''} {caption}"),
         "created_at": datetime.now(timezone.utc),
     }
-    await db.upsert_file(record)
+    index_result = await db.upsert_file(record)
+    stored_file = await db.db.files.find_one(
+        {"source_chat_id": storage.id, "source_message_id": copied.message_id}, {"_id": 1}
+    )
+    if index_result.upserted_id and stored_file:
+        await announce_new_file(message.bot, record, str(stored_file["_id"]))
     await message.answer(
         f"✅ Added to <b>{storage.title}</b> and indexed.\n\n"
         f"Title: <b>{record['name']}</b>\n"

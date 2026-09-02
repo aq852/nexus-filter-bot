@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     auto_delete_seconds: int = 0
     timezone: str = "Asia/Kolkata"
     storage_channel_id: int | None = None
+    updates_channel_id: int | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 
