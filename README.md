@@ -38,4 +38,8 @@ Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broa
 
 Group-admin commands: `/setwelcome`, `/clearwelcome`, `/setrules`, `/rules`, `/filter`, `/stopfilter`, `/blacklist`, `/unblacklist`, `/antispam on|off`, and `/disable` or `/enable`.
 
+## Request fulfilment
+
+Missing-file requests are grouped by search term and sent to the owner. When you add a likely matching authorized file to a source channel, the bot automatically marks the request fulfilled and privately notifies every requester with a ten-minute delivery button.
+
 Only index and distribute content you own or are authorized to share.

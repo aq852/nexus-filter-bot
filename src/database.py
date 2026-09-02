@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta, timezone
 from difflib import SequenceMatcher
 
+from .utils import normalize_query
+
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 
@@ -97,3 +99,16 @@ class Database:
 
     async def top_searches(self, limit: int = 5) -> list[dict]:
         return await self.db.searches.find({}).sort("count", -1).limit(limit).to_list(length=limit)
+
+    async def matching_requests(self, searchable_text: str, limit: int = 100) -> list[dict]:
+        """Find open requests that are likely fulfilled by an indexed file."""
+        haystack = normalize_query(searchable_text).lower()
+        matches = []
+        async for request in self.db.requests.find({"status": "open"}).limit(limit):
+            query = normalize_query(request["query"]).lower()
+            words = [word for word in query.split() if len(word) > 2]
+            overlap = sum(word in haystack for word in words)
+            ratio = SequenceMatcher(None, query, haystack).ratio()
+            if query in haystack or (words and overlap / len(words) >= 0.75) or ratio >= 0.62:
+                matches.append(request)
+        return matches

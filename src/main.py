@@ -194,7 +194,7 @@ async def owner_panel_action(callback: CallbackQuery) -> None:
         text = f"<b>Source channels ({len(sources)})</b>\n{details or 'No channels added.'}\n\nAdd: <code>/addsource CHAT_ID</code>\nRemove: <code>/removesource CHAT_ID</code>"
     elif action == "requests":
         requests = await db.db.requests.find({"status": "open"}).sort("created_at", -1).to_list(length=15)
-        details = "\n".join(f"• <code>{item['_id']}</code> — {item['query']}" for item in requests)
+        details = "\n".join(f"• <code>{item['_id']}</code> — {item['query']} ({len(item.get('requesters', [])) or 1} user(s))" for item in requests)
         text = f"<b>Open requests ({len(requests)})</b>\n{details or 'No pending requests.'}\n\nClose one: <code>/closerequest REQUEST_ID</code>"
     elif action == "searches":
         searches = await db.top_searches()
@@ -228,6 +228,34 @@ async def index_channel_file(message: Message) -> None:
         "created_at": datetime.now(timezone.utc),
     }
     await db.upsert_file(record)
+    stored_file = await db.db.files.find_one(
+        {"source_chat_id": message.chat.id, "source_message_id": message.message_id}, {"_id": 1}
+    )
+    if not stored_file:
+        return
+    stored_file_id = str(stored_file["_id"])
+    matching_requests = await db.matching_requests(record["search_text"])
+    for request in matching_requests:
+        requester_ids = request.get("requesters") or ([request["user_id"]] if request.get("user_id") else [])
+        delivered = 0
+        for user_id in requester_ids:
+            token = await db.make_download_token(stored_file_id, user_id)
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+            ]])
+            try:
+                await message.bot.send_message(
+                    user_id,
+                    f"✅ <b>Now available:</b> {record['name']}\nYour request for <i>{request['query']}</i> may have been fulfilled.",
+                    reply_markup=keyboard,
+                )
+                delivered += 1
+            except Exception:
+                continue
+        await db.db.requests.update_one(
+            {"_id": request["_id"]},
+            {"$set": {"status": "fulfilled", "fulfilled_at": datetime.now(timezone.utc), "fulfilled_file_id": stored_file_id, "notified_users": delivered}},
+        )
 
 
 @router.message(Command("setwelcome"))
@@ -507,12 +535,29 @@ async def request_missing(callback: CallbackQuery) -> None:
     if not session or session["user_id"] != callback.from_user.id:
         await callback.answer("This request expired.", show_alert=True)
         return
+    existing = await db.db.requests.find_one({"query": session["query"], "status": "open"})
+    existing_requesters = (existing or {}).get("requesters") or ([(existing or {}).get("user_id")] if (existing or {}).get("user_id") else [])
+    is_new_requester = callback.from_user.id not in existing_requesters
     await db.db.requests.update_one(
-        {"query": session["query"], "user_id": callback.from_user.id},
-        {"$setOnInsert": {"query": session["query"], "user_id": callback.from_user.id, "created_at": datetime.now(timezone.utc), "status": "open"}},
+        {"query": session["query"], "status": "open"},
+        {
+            "$setOnInsert": {"query": session["query"], "created_at": datetime.now(timezone.utc), "status": "open"},
+            "$addToSet": {"requesters": callback.from_user.id},
+            "$set": {"last_requested_at": datetime.now(timezone.utc)},
+        },
         upsert=True,
     )
-    await callback.answer("Request saved. The owner can review it.", show_alert=True)
+    request = await db.db.requests.find_one({"query": session["query"], "status": "open"})
+    count = len(request.get("requesters", [])) if request else 1
+    if is_new_requester:
+        try:
+            await callback.bot.send_message(
+                settings.owner_id,
+                f"📩 <b>New file request</b>\nQuery: <b>{session['query']}</b>\nRequested by: {count} user(s)\n\nAdd a matching authorized file to a source channel to notify requesters automatically.",
+            )
+        except Exception:
+            pass
+    await callback.answer(f"Request saved. {count} user(s) requested this.", show_alert=True)
 
 
 @router.message(Command("stats"))
