@@ -31,8 +31,9 @@ def panel_keyboard() -> InlineKeyboardMarkup:
          InlineKeyboardButton(text="📁 Source channels", callback_data="panel:sources")],
         [InlineKeyboardButton(text="📩 Open requests", callback_data="panel:requests"),
          InlineKeyboardButton(text="🔎 Top searches", callback_data="panel:searches")],
-        [InlineKeyboardButton(text="📣 Broadcast help", callback_data="panel:broadcast"),
-         InlineKeyboardButton(text="🗓 Schedules", callback_data="panel:schedules")],
+        [InlineKeyboardButton(text="🗂 Recent files", callback_data="panel:files"),
+         InlineKeyboardButton(text="📣 Broadcast help", callback_data="panel:broadcast")],
+        [InlineKeyboardButton(text="🗓 Schedules", callback_data="panel:schedules")],
         [InlineKeyboardButton(text="🛡 User controls", callback_data="panel:users")],
         [InlineKeyboardButton(text="✕ Close", callback_data="panel:close")],
     ])
@@ -172,6 +173,74 @@ async def remove_source(message: Message, command: CommandObject) -> None:
     await message.answer("✅ Source channel removed." if result.deleted_count else "That channel is not a source.")
 
 
+@router.message(Command("recentfiles"))
+async def recent_files(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    files = await db.db.files.find({}).sort("created_at", -1).to_list(length=20)
+    details = "\n".join(f"• <code>{item['_id']}</code> — {item['name'][:55]}" for item in files)
+    await message.answer(f"<b>Recently indexed files</b>\n{details or 'No files indexed yet.'}")
+
+
+@router.message(Command("renamefile"))
+async def rename_file(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_id, name = (command.args or "").split("|", 1)
+        file_id = ObjectId(raw_id.strip())
+        name = name.strip()
+        if not name:
+            raise ValueError
+    except Exception:
+        await message.answer("Usage: <code>/renamefile FILE_ID | New searchable title</code>")
+        return
+    file = await db.db.files.find_one({"_id": file_id})
+    if not file:
+        await message.answer("File not found.")
+        return
+    search_text = normalize_query(f"{name} {file.get('caption', '')} {' '.join(file.get('tags', []))}")
+    await db.db.files.update_one({"_id": file_id}, {"$set": {"name": name, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
+    await message.answer("✅ File title updated and reindexed.")
+
+
+@router.message(Command("addtags"))
+async def add_tags(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_id, raw_tags = (command.args or "").split("|", 1)
+        file_id = ObjectId(raw_id.strip())
+        tags = [normalize_query(tag).lstrip("#").lower() for tag in raw_tags.replace(",", " ").split()]
+        tags = list(dict.fromkeys(tag for tag in tags if tag))
+        if not tags:
+            raise ValueError
+    except Exception:
+        await message.answer("Usage: <code>/addtags FILE_ID | hindi 1080p action</code>")
+        return
+    file = await db.db.files.find_one({"_id": file_id})
+    if not file:
+        await message.answer("File not found.")
+        return
+    merged_tags = list(dict.fromkeys([*file.get("tags", []), *tags]))
+    search_text = normalize_query(f"{file['name']} {file.get('caption', '')} {' '.join(merged_tags)}")
+    await db.db.files.update_one({"_id": file_id}, {"$set": {"tags": merged_tags, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
+    await message.answer(f"✅ Tags saved: <code>{' '.join(merged_tags)}</code>")
+
+
+@router.message(Command("removefile"))
+async def remove_file(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        file_id = ObjectId(command.args or "")
+    except Exception:
+        await message.answer("Usage: <code>/removefile FILE_ID</code>")
+        return
+    result = await db.db.files.delete_one({"_id": file_id})
+    await message.answer("✅ File removed from the searchable index." if result.deleted_count else "File not found.")
+
+
 @router.message(Command("panel"))
 async def panel(message: Message) -> None:
     if not is_owner(message.from_user.id):
@@ -203,6 +272,10 @@ async def owner_panel_action(callback: CallbackQuery) -> None:
         searches = await db.top_searches()
         details = "\n".join(f"• {item['query']} — <b>{item['count']}</b>" for item in searches)
         text = f"<b>Top searches</b>\n{details or 'No searches recorded yet.'}"
+    elif action == "files":
+        files = await db.db.files.find({}).sort("created_at", -1).to_list(length=10)
+        details = "\n".join(f"• <code>{item['_id']}</code> — {item['name'][:55]}" for item in files)
+        text = f"<b>Recently indexed files</b>\n{details or 'No files indexed yet.'}\n\nManage: <code>/renamefile ID | title</code>\nTag: <code>/addtags ID | tag1 tag2</code>\nRemove: <code>/removefile ID</code>"
     elif action == "broadcast":
         text = "<b>Broadcast</b>\n\nSend <code>/broadcast Your message here</code> to deliver immediately.\n\nSchedule: <code>/schedule YYYY-MM-DD HH:MM | Your message</code>"
     elif action == "schedules":

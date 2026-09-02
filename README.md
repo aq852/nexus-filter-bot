@@ -36,6 +36,14 @@ docs/           setup and operating notes
 
 Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broadcast`, `/ban`, `/unban`, and `/closerequest`.
 
+## File management
+
+Use `/recentfiles` or the **Recent files** control-panel button to get file IDs. Then manage indexed search metadata without reposting the file:
+
+- `/renamefile FILE_ID | New title` updates the searchable display title.
+- `/addtags FILE_ID | tag1 tag2` adds search tags such as language, quality, or topic.
+- `/removefile FILE_ID` removes a stale entry from the searchable index; it does not delete the original Telegram channel post.
+
 ## Scheduled broadcasts
 
 Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.
