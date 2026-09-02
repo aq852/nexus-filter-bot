@@ -24,6 +24,23 @@ def media_kind(message: Any) -> str:
     return "📄 File"
 
 
+def media_category(message: Any) -> str:
+    """Stable internal category used by search filters."""
+    if getattr(message, "video", None) or getattr(message, "animation", None):
+        return "video"
+    if getattr(message, "audio", None):
+        return "audio"
+    if getattr(message, "photo", None):
+        return "image"
+    document = getattr(message, "document", None)
+    name = (getattr(document, "file_name", "") or "").lower()
+    if name.endswith((".apk", ".exe", ".msi", ".dmg", ".zip", ".rar", ".7z")):
+        return "tool"
+    if name.endswith((".pdf", ".epub", ".mobi", ".cbz")):
+        return "book"
+    return "file"
+
+
 def message_file(message: Any) -> tuple[str | None, str | None]:
     """Return Telegram file ID and a searchable display name for supported media."""
     if getattr(message, "document", None):

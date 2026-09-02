@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     mongodb_database: str = "telegram_autofilter"
     force_sub_channel_id: int | None = None
     results_per_page: int = 8
+    auto_delete_seconds: int = 0
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -6,7 +6,7 @@ A centrally managed Telegram search bot that anyone can add to a group. It searc
 
 - Search a unified library from any group where the bot is present
 - Index documents, media, apps, archives, and other authorized files from owner-approved source channels
-- Paginated results and private, user-bound delivery buttons that expire after ten minutes
+- Smart search with typo suggestions, file-type filters, paginated results, and private user-bound delivery buttons that expire after ten minutes
 - Optional forced-subscription check, missing-file requests, top-search analytics, broadcast, and an owner-only control panel
 - One owner-controlled configuration; group administrators do not manage separate libraries
 

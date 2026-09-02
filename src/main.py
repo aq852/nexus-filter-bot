@@ -11,7 +11,7 @@ from bson import ObjectId
 
 from .config import Settings, get_settings
 from .database import Database
-from .utils import media_kind, message_file, normalize_query
+from .utils import media_category, media_kind, message_file, normalize_query
 
 router = Router()
 db: Database
@@ -52,39 +52,57 @@ async def subscription_ok(bot: Bot, user_id: int) -> bool:
         return False
 
 
-def result_keyboard(files: list[dict], session_id: str, page: int, total: int) -> InlineKeyboardMarkup:
+FILTERS = (("🎬 Video", "video"), ("📚 Books", "book"), ("🛠 Tools", "tool"), ("🎵 Audio", "audio"), ("📄 Other", "file"))
+
+
+def result_keyboard(files: list[dict], session_id: str, page: int, total: int, category: str | None = None) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"{item['kind']} · {item['name'][:46]}", callback_data=f"file:{item['_id']}")]
         for item in files
     ]
+    rows.append([InlineKeyboardButton(text=label, callback_data=f"filter:{session_id}:{value}") for label, value in FILTERS])
     navigation = []
     if page:
-        navigation.append(InlineKeyboardButton(text="‹ Prev", callback_data=f"page:{session_id}:{page - 1}"))
+        navigation.append(InlineKeyboardButton(text="‹ Prev", callback_data=f"page:{session_id}:{category or 'all'}:{page - 1}"))
     if (page + 1) * settings.results_per_page < total:
-        navigation.append(InlineKeyboardButton(text="Next ›", callback_data=f"page:{session_id}:{page + 1}"))
+        navigation.append(InlineKeyboardButton(text="Next ›", callback_data=f"page:{session_id}:{category or 'all'}:{page + 1}"))
     if navigation:
         rows.append(navigation)
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None) -> None:
+async def delete_later(message: Message) -> None:
+    if settings.auto_delete_seconds:
+        await asyncio.sleep(settings.auto_delete_seconds)
+        try:
+            await message.delete()
+        except Exception:
+            pass
+
+
+async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None, category: str | None = None) -> None:
     clean_query = normalize_query(query)
     await db.record_search(clean_query)
-    files, total = await db.search(clean_query, page, settings.results_per_page)
+    files, total = await db.search(clean_query, page, settings.results_per_page, category)
     if not session_id:
         session_id = await db.save_search_session(user_id, message.chat.id, clean_query)
     if not files:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text="📩 Request this", callback_data=f"request:{session_id}")
         ]])
-        await message.answer(f"No results for <b>{clean_query}</b>.", reply_markup=keyboard)
+        suggestions = await db.suggestions(clean_query)
+        hint = "\n<b>Did you mean:</b> " + " • ".join(suggestions) if suggestions else ""
+        sent = await message.answer(f"No results for <b>{clean_query}</b>.{hint}", reply_markup=keyboard)
+        asyncio.create_task(delete_later(sent))
         return
     first = page * settings.results_per_page + 1
     last = first + len(files) - 1
-    await message.answer(
-        f"<b>Results for:</b> {clean_query}\nShowing {first}–{last} of {total}.\n\nTap a result to receive it privately.",
-        reply_markup=result_keyboard(files, session_id, page, total),
+    filter_label = f" · {category.title()}" if category else ""
+    sent = await message.answer(
+        f"<b>Results for:</b> {clean_query}{filter_label}\nShowing {first}–{last} of {total}.\n\nChoose a type to narrow results, or tap a result for private delivery.",
+        reply_markup=result_keyboard(files, session_id, page, total, category),
     )
+    asyncio.create_task(delete_later(sent))
 
 
 @router.message(Command("start"))
@@ -95,6 +113,9 @@ async def start(message: Message) -> None:
         upsert=True,
     )
     await message.answer("Welcome to <b>NexusFilterBot</b>. Add me to a group, then send a file name or title to search the shared library.")
+    popular = await db.top_searches(5)
+    if popular:
+        await message.answer("<b>Popular searches</b>\n" + "\n".join(f"• {item['query']}" for item in popular))
 
 
 @router.message(Command("addsource"))
@@ -181,6 +202,7 @@ async def index_channel_file(message: Message) -> None:
         "telegram_file_id": file_id,
         "name": name or "file",
         "kind": media_kind(message),
+        "category": media_category(message),
         "caption": caption,
         "search_text": normalize_query(f"{name or ''} {caption}"),
         "created_at": datetime.now(timezone.utc),
@@ -251,15 +273,34 @@ async def broadcast(message: Message, command: CommandObject) -> None:
 
 @router.callback_query(F.data.startswith("page:"))
 async def paginate(callback: CallbackQuery) -> None:
-    _, session_id, raw_page = callback.data.split(":")
+    _, session_id, raw_category, raw_page = callback.data.split(":")
     session = await db.get_session(session_id)
     if not session or session["user_id"] != callback.from_user.id:
         await callback.answer("This search expired. Please search again.", show_alert=True)
         return
-    files, total = await db.search(session["query"], int(raw_page), settings.results_per_page)
+    category = None if raw_category == "all" else raw_category
+    files, total = await db.search(session["query"], int(raw_page), settings.results_per_page, category)
     await callback.message.edit_text(
-        f"<b>Results for:</b> {session['query']}",
-        reply_markup=result_keyboard(files, session_id, int(raw_page), total),
+        f"<b>Results for:</b> {session['query']}{f' · {category.title()}' if category else ''}",
+        reply_markup=result_keyboard(files, session_id, int(raw_page), total, category),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("filter:"))
+async def filter_results(callback: CallbackQuery) -> None:
+    _, session_id, category = callback.data.split(":")
+    session = await db.get_session(session_id)
+    if not session or session["user_id"] != callback.from_user.id:
+        await callback.answer("This search expired. Please search again.", show_alert=True)
+        return
+    files, total = await db.search(session["query"], 0, settings.results_per_page, category)
+    if not files:
+        await callback.answer(f"No {category} results for this search.", show_alert=True)
+        return
+    await callback.message.edit_text(
+        f"<b>Results for:</b> {session['query']} · {category.title()}",
+        reply_markup=result_keyboard(files, session_id, 0, total, category),
     )
     await callback.answer()
 

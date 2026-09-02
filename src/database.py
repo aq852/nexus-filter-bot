@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta, timezone
+from difflib import SequenceMatcher
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -36,14 +37,28 @@ class Database:
             upsert=True,
         )
 
-    async def search(self, query: str, page: int, size: int) -> tuple[list[dict], int]:
+    async def search(self, query: str, page: int, size: int, category: str | None = None) -> tuple[list[dict], int]:
         words = " ".join(normalized for normalized in query.split() if normalized)
         selector = {"$text": {"$search": words}} if words else {}
+        if category:
+            selector["category"] = category
         total = await self.db.files.count_documents(selector)
         cursor = self.db.files.find(selector, {"score": {"$meta": "textScore"}}).sort(
             [("score", {"$meta": "textScore"}), ("created_at", -1)]
         )
         return await cursor.skip(page * size).limit(size).to_list(length=size), total
+
+    async def suggestions(self, query: str, limit: int = 3) -> list[str]:
+        """Return a small set of close filename matches without a costly full-library scan."""
+        candidates = await self.db.files.find({}, {"name": 1}).sort("created_at", -1).limit(250).to_list(length=250)
+        scored: list[tuple[float, str]] = []
+        needle = query.lower()
+        for item in candidates:
+            name = item.get("name", "")
+            score = SequenceMatcher(None, needle, name.lower()).ratio()
+            if score >= 0.45:
+                scored.append((score, name))
+        return [name for _, name in sorted(scored, reverse=True)[:limit]]
 
     async def save_search_session(self, user_id: int, chat_id: int, query: str) -> str:
         result = await self.db.search_sessions.insert_one(
