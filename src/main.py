@@ -16,6 +16,7 @@ from .utils import media_category, media_kind, message_file, normalize_query
 router = Router()
 db: Database
 settings: Settings
+recent_messages: dict[tuple[int, int], float] = {}
 
 
 def is_owner(user_id: int) -> bool:
@@ -50,6 +51,25 @@ async def subscription_ok(bot: Bot, user_id: int) -> bool:
         return member.status not in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
     except Exception:
         return False
+
+
+async def is_group_admin(message: Message) -> bool:
+    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP}:
+        return False
+    if is_owner(message.from_user.id):
+        return True
+    try:
+        member = await message.bot.get_chat_member(message.chat.id, message.from_user.id)
+        return member.status in {ChatMemberStatus.ADMINISTRATOR, ChatMemberStatus.CREATOR}
+    except Exception:
+        return False
+
+
+async def require_group_admin(message: Message) -> bool:
+    if await is_group_admin(message):
+        return True
+    await message.reply("Only this group's administrators can use that command.")
+    return False
 
 
 FILTERS = (("🎬 Video", "video"), ("📚 Books", "book"), ("🛠 Tools", "tool"), ("🎵 Audio", "audio"), ("📄 Other", "file"))
@@ -210,16 +230,163 @@ async def index_channel_file(message: Message) -> None:
     await db.upsert_file(record)
 
 
+@router.message(Command("setwelcome"))
+async def set_welcome(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    text = (command.args or "").strip()
+    if not text:
+        await message.answer("Usage: <code>/setwelcome Welcome {name} to {group}!</code>")
+        return
+    await db.db.groups.update_one({"chat_id": message.chat.id}, {"$set": {"welcome_message": text}}, upsert=True)
+    await message.answer("✅ Welcome message saved. Use <code>{name}</code> and <code>{group}</code> as placeholders.")
+
+
+@router.message(Command("clearwelcome"))
+async def clear_welcome(message: Message) -> None:
+    if not await require_group_admin(message):
+        return
+    await db.db.groups.update_one({"chat_id": message.chat.id}, {"$unset": {"welcome_message": ""}})
+    await message.answer("✅ Welcome message cleared.")
+
+
+@router.message(Command("setrules"))
+async def set_rules(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    text = (command.args or "").strip()
+    if not text:
+        await message.answer("Usage: <code>/setrules Your group rules</code>")
+        return
+    await db.db.groups.update_one({"chat_id": message.chat.id}, {"$set": {"rules": text}}, upsert=True)
+    await message.answer("✅ Rules saved.")
+
+
+@router.message(Command("rules"))
+async def rules(message: Message) -> None:
+    group = await db.db.groups.find_one({"chat_id": message.chat.id})
+    await message.answer(f"<b>Group rules</b>\n\n{group.get('rules', 'No rules have been set yet.') if group else 'No rules have been set yet.'}")
+
+
+@router.message(Command("filter"))
+async def add_filter(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    try:
+        keyword, reply = (command.args or "").split("|", 1)
+    except ValueError:
+        await message.answer("Usage: <code>/filter keyword | reply text</code>")
+        return
+    keyword, reply = normalize_query(keyword).lower(), reply.strip()
+    if not keyword or not reply:
+        await message.answer("Both a keyword and reply are required.")
+        return
+    await db.db.keyword_filters.update_one(
+        {"chat_id": message.chat.id, "keyword": keyword}, {"$set": {"reply": reply}}, upsert=True
+    )
+    await message.answer(f"✅ Auto-reply added for <code>{keyword}</code>.")
+
+
+@router.message(Command("stopfilter"))
+async def remove_filter(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    keyword = normalize_query(command.args or "").lower()
+    if not keyword:
+        await message.answer("Usage: <code>/stopfilter keyword</code>")
+        return
+    result = await db.db.keyword_filters.delete_one({"chat_id": message.chat.id, "keyword": keyword})
+    await message.answer("✅ Auto-reply removed." if result.deleted_count else "That keyword has no auto-reply.")
+
+
+@router.message(Command("blacklist"))
+@router.message(Command("unblacklist"))
+async def manage_blacklist(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    word = normalize_query(command.args or "").lower()
+    if not word:
+        await message.answer(f"Usage: <code>/{command.command} word or phrase</code>")
+        return
+    if command.command == "blacklist":
+        await db.db.blacklist.update_one({"chat_id": message.chat.id, "word": word}, {"$set": {"word": word}}, upsert=True)
+        await message.answer(f"✅ Blocked: <code>{word}</code>")
+    else:
+        result = await db.db.blacklist.delete_one({"chat_id": message.chat.id, "word": word})
+        await message.answer("✅ Removed from blacklist." if result.deleted_count else "That word was not blocked.")
+
+
+@router.message(Command("antispam"))
+async def anti_spam(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    choice = (command.args or "").lower()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/antispam on</code> or <code>/antispam off</code>")
+        return
+    await db.db.groups.update_one({"chat_id": message.chat.id}, {"$set": {"anti_spam": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Anti-spam is now <b>{choice}</b>.")
+
+
+@router.message(Command("disable"))
+@router.message(Command("enable"))
+async def toggle_group_search(message: Message, command: CommandObject) -> None:
+    if not await require_group_admin(message):
+        return
+    disabled = command.command == "disable"
+    await db.db.groups.update_one({"chat_id": message.chat.id}, {"$set": {"disabled": disabled}}, upsert=True)
+    await message.answer(f"✅ Search is now <b>{'disabled' if disabled else 'enabled'}</b> in this group.")
+
+
+@router.message(F.new_chat_members)
+async def welcome_new_members(message: Message) -> None:
+    group = await db.db.groups.find_one({"chat_id": message.chat.id})
+    template = group.get("welcome_message") if group else None
+    if not template:
+        return
+    for user in message.new_chat_members:
+        if not user.is_bot:
+            text = template.replace("{name}", user.full_name).replace("{group}", message.chat.title or "this group")
+            await message.answer(text)
+
+
 @router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text, ~F.text.startswith("/"))
 async def group_search(message: Message) -> None:
-    if await db.db.groups.find_one({"chat_id": message.chat.id, "disabled": True}):
+    group = await db.db.groups.find_one({"chat_id": message.chat.id}) or {}
+    normalized = normalize_query(message.text)
+    lower_text = normalized.lower()
+    blocked = await db.db.blacklist.find_one({"chat_id": message.chat.id, "word": {"$in": [lower_text]}})
+    if not blocked:
+        blocked_words = await db.db.blacklist.find({"chat_id": message.chat.id}).to_list(length=100)
+        blocked = next((item for item in blocked_words if item["word"] in lower_text), None)
+    if blocked:
+        try:
+            await message.delete()
+        except Exception:
+            pass
+        return
+    if group.get("anti_spam") and not await is_group_admin(message):
+        now = message.date.timestamp()
+        key = (message.chat.id, message.from_user.id)
+        if now - recent_messages.get(key, 0) < 1.2:
+            try:
+                await message.delete()
+            except Exception:
+                pass
+            return
+        recent_messages[key] = now
+    keyword_filter = await db.db.keyword_filters.find_one({"chat_id": message.chat.id, "keyword": lower_text})
+    if keyword_filter:
+        await message.reply(keyword_filter["reply"])
+        return
+    if group.get("disabled"):
         return
     if await db.db.users.find_one({"user_id": message.from_user.id, "banned": True}):
         return
     if not await subscription_ok(message.bot, message.from_user.id):
         await message.reply("Join the required updates channel first, then try again.")
         return
-    if len(normalize_query(message.text)) < 2:
+    if len(normalized) < 2:
         return
     await render_results(message, message.from_user.id, message.text, 0)
 

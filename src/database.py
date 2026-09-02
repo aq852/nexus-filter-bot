@@ -18,6 +18,8 @@ class Database:
         await self.db.search_sessions.create_index("created_at", expireAfterSeconds=3600)
         await self.db.download_tokens.create_index("expires_at", expireAfterSeconds=0)
         await self.db.searches.create_index("query", unique=True)
+        await self.db.keyword_filters.create_index([("chat_id", 1), ("keyword", 1)], unique=True)
+        await self.db.blacklist.create_index([("chat_id", 1), ("word", 1)], unique=True)
 
     async def close(self) -> None:
         self.client.close()

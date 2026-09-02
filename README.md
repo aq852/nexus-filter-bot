@@ -9,6 +9,7 @@ A centrally managed Telegram search bot that anyone can add to a group. It searc
 - Smart search with typo suggestions, file-type filters, paginated results, and private user-bound delivery buttons that expire after ten minutes
 - Optional forced-subscription check, missing-file requests, top-search analytics, broadcast, and an owner-only control panel
 - One owner-controlled configuration; group administrators do not manage separate libraries
+- Group-local tools for administrators: welcome messages, rules, keyword replies, blacklist, anti-spam, and search on/off
 
 ## Technical direction
 
@@ -34,5 +35,7 @@ docs/           setup and operating notes
 5. Add the bot to any public group. Members can search by sending a title or filename.
 
 Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broadcast`, `/ban`, `/unban`, and `/closerequest`.
+
+Group-admin commands: `/setwelcome`, `/clearwelcome`, `/setrules`, `/rules`, `/filter`, `/stopfilter`, `/blacklist`, `/unblacklist`, `/antispam on|off`, and `/disable` or `/enable`.
 
 Only index and distribute content you own or are authorized to share.
