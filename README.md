@@ -48,6 +48,10 @@ Use `/recentfiles` or the **Recent files** control-panel button to get file IDs.
 
 Set `STORAGE_CHANNEL_ID` to an owner-controlled channel where the bot is an administrator. Then send a supported file to the bot in a private chat as the configured owner. The bot copies the file into that channel and indexes it immediately, so it is searchable in groups without manually posting it to a source channel.
 
+## Inline search
+
+Enable inline mode for the bot in BotFather using `/setinline`. After that, people can search from any Telegram chat with `@YourBotUsername title`. Each result uses a deep link that opens the bot privately; the user then completes the usual subscription check and receives a personal ten-minute delivery button.
+
 ## Scheduled broadcasts
 
 Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.

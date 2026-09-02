@@ -7,7 +7,15 @@ from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
 from aiogram.filters import Command, CommandObject
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InlineQuery,
+    InlineQueryResultArticle,
+    InputTextMessageContent,
+    Message,
+)
 from bson import ObjectId
 from pymongo import ReturnDocument
 
@@ -19,6 +27,7 @@ router = Router()
 db: Database
 settings: Settings
 recent_messages: dict[tuple[int, int], float] = {}
+bot_username: str | None = None
 
 
 def is_owner(user_id: int) -> bool:
@@ -161,16 +170,60 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
 
 
 @router.message(Command("start"))
-async def start(message: Message) -> None:
+async def start(message: Message, command: CommandObject) -> None:
     await db.db.users.update_one(
         {"user_id": message.from_user.id},
         {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "last_seen": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    payload = command.args or ""
+    if payload.startswith("file_"):
+        try:
+            file = await db.db.files.find_one({"_id": ObjectId(payload.removeprefix("file_"))})
+        except Exception:
+            file = None
+        if not file:
+            await message.answer("That inline result is no longer available. Please search again.")
+            return
+        if not await subscription_ok(message.bot, message.from_user.id):
+            await message.answer("Join the required updates channel first, then reopen this result.")
+            return
+        token = await db.make_download_token(str(file["_id"]), message.from_user.id)
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+        ]])
+        await message.answer(f"<b>{file['name']}</b>\nYour private delivery button is ready.", reply_markup=keyboard)
+        return
     await message.answer("Welcome to <b>NexusFilterBot</b>. Add me to a group, then send a file name or title to search the shared library.")
     popular = await db.top_searches(5)
     if popular:
         await message.answer("<b>Popular searches</b>\n" + "\n".join(f"• {item['query']}" for item in popular))
+
+
+@router.inline_query()
+async def inline_search(inline_query: InlineQuery) -> None:
+    query = normalize_query(inline_query.query)
+    if len(query) < 2 or not bot_username:
+        await inline_query.answer([], cache_time=5, is_personal=True, switch_pm_text="Type at least two characters to search", switch_pm_parameter="search")
+        return
+    files, _ = await db.search(query, 0, 20)
+    results = []
+    for file in files:
+        file_id = str(file["_id"])
+        delivery_url = f"https://t.me/{bot_username}?start=file_{file_id}"
+        results.append(InlineQueryResultArticle(
+            id=file_id,
+            title=file["name"][:64],
+            description=f"{file['kind']} · Open privately for delivery",
+            input_message_content=InputTextMessageContent(
+                message_text=f"<b>{file['name']}</b>\nPrivate delivery is available from NexusFilterBot.",
+                parse_mode=ParseMode.HTML,
+            ),
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📥 Open private delivery", url=delivery_url)
+            ]]),
+        ))
+    await inline_query.answer(results, cache_time=10, is_personal=True)
 
 
 @router.message(Command("addsource"))
@@ -831,12 +884,13 @@ async def stats(message: Message) -> None:
 
 
 async def main() -> None:
-    global db, settings
+    global bot_username, db, settings
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
     db = Database(settings.mongodb_uri, settings.mongodb_database)
     await db.connect()
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+    bot_username = (await bot.get_me()).username
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     scheduler = asyncio.create_task(scheduled_broadcast_worker(bot))
