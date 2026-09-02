@@ -16,6 +16,7 @@ class Database:
         await self.db.source_channels.create_index("chat_id", unique=True)
         await self.db.search_sessions.create_index("created_at", expireAfterSeconds=3600)
         await self.db.download_tokens.create_index("expires_at", expireAfterSeconds=0)
+        await self.db.searches.create_index("query", unique=True)
 
     async def close(self) -> None:
         self.client.close()
@@ -69,3 +70,13 @@ class Database:
             return await self.db.download_tokens.find_one({"_id": ObjectId(token), "user_id": user_id})
         except Exception:
             return None
+
+    async def record_search(self, query: str) -> None:
+        await self.db.searches.update_one(
+            {"query": query},
+            {"$inc": {"count": 1}, "$set": {"last_searched": datetime.now(timezone.utc)}},
+            upsert=True,
+        )
+
+    async def top_searches(self, limit: int = 5) -> list[dict]:
+        return await self.db.searches.find({}).sort("count", -1).limit(limit).to_list(length=limit)

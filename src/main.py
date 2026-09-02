@@ -22,6 +22,26 @@ def is_owner(user_id: int) -> bool:
     return user_id == settings.owner_id
 
 
+def panel_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📊 Live stats", callback_data="panel:stats"),
+         InlineKeyboardButton(text="📁 Source channels", callback_data="panel:sources")],
+        [InlineKeyboardButton(text="📩 Open requests", callback_data="panel:requests"),
+         InlineKeyboardButton(text="🔎 Top searches", callback_data="panel:searches")],
+        [InlineKeyboardButton(text="📣 Broadcast help", callback_data="panel:broadcast"),
+         InlineKeyboardButton(text="🛡 User controls", callback_data="panel:users")],
+        [InlineKeyboardButton(text="✕ Close", callback_data="panel:close")],
+    ])
+
+
+async def owner_stats_text() -> str:
+    files = await db.db.files.count_documents({})
+    users = await db.db.users.count_documents({})
+    sources = await db.db.source_channels.count_documents({})
+    requests = await db.db.requests.count_documents({"status": "open"})
+    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nSource channels: <b>{sources}</b>\nOpen requests: <b>{requests}</b>"
+
+
 async def subscription_ok(bot: Bot, user_id: int) -> bool:
     if not settings.force_sub_channel_id:
         return True
@@ -49,6 +69,7 @@ def result_keyboard(files: list[dict], session_id: str, page: int, total: int) -
 
 async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None) -> None:
     clean_query = normalize_query(query)
+    await db.record_search(clean_query)
     files, total = await db.search(clean_query, page, settings.results_per_page)
     if not session_id:
         session_id = await db.save_search_session(user_id, message.chat.id, clean_query)
@@ -94,6 +115,58 @@ async def add_source(message: Message, command: CommandObject) -> None:
     await message.answer(f"✅ Source channel added: <b>{chat.title}</b>")
 
 
+@router.message(Command("removesource"))
+async def remove_source(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        chat_id = int(command.args or "")
+    except ValueError:
+        await message.answer("Usage: <code>/removesource -1001234567890</code>")
+        return
+    result = await db.db.source_channels.delete_one({"chat_id": chat_id})
+    await message.answer("✅ Source channel removed." if result.deleted_count else "That channel is not a source.")
+
+
+@router.message(Command("panel"))
+async def panel(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await message.answer(await owner_stats_text(), reply_markup=panel_keyboard())
+
+
+@router.callback_query(F.data.startswith("panel:"))
+async def owner_panel_action(callback: CallbackQuery) -> None:
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Owner only.", show_alert=True)
+        return
+    action = callback.data.split(":", 1)[1]
+    if action == "close":
+        await callback.message.delete()
+        await callback.answer()
+        return
+    if action == "stats":
+        text = await owner_stats_text()
+    elif action == "sources":
+        sources = await db.db.source_channels.find({}).sort("added_at", -1).to_list(length=50)
+        details = "\n".join(f"• <code>{item['chat_id']}</code> — {item.get('title') or 'Untitled'}" for item in sources)
+        text = f"<b>Source channels ({len(sources)})</b>\n{details or 'No channels added.'}\n\nAdd: <code>/addsource CHAT_ID</code>\nRemove: <code>/removesource CHAT_ID</code>"
+    elif action == "requests":
+        requests = await db.db.requests.find({"status": "open"}).sort("created_at", -1).to_list(length=15)
+        details = "\n".join(f"• <code>{item['_id']}</code> — {item['query']}" for item in requests)
+        text = f"<b>Open requests ({len(requests)})</b>\n{details or 'No pending requests.'}\n\nClose one: <code>/closerequest REQUEST_ID</code>"
+    elif action == "searches":
+        searches = await db.top_searches()
+        details = "\n".join(f"• {item['query']} — <b>{item['count']}</b>" for item in searches)
+        text = f"<b>Top searches</b>\n{details or 'No searches recorded yet.'}"
+    elif action == "broadcast":
+        text = "<b>Broadcast</b>\n\nSend <code>/broadcast Your message here</code>. The bot delivers it to every user who has started it."
+    else:
+        text = "<b>User controls</b>\n\nBan: <code>/ban USER_ID</code>\nUnban: <code>/unban USER_ID</code>\n\nBanned users cannot search."
+    await callback.message.edit_text(text, reply_markup=panel_keyboard())
+    await callback.answer()
+
+
 @router.channel_post(F.document | F.video | F.audio | F.animation | F.photo)
 async def index_channel_file(message: Message) -> None:
     if not await db.is_source_channel(message.chat.id):
@@ -127,6 +200,53 @@ async def group_search(message: Message) -> None:
     if len(normalize_query(message.text)) < 2:
         return
     await render_results(message, message.from_user.id, message.text, 0)
+
+
+@router.message(Command("ban"))
+@router.message(Command("unban"))
+async def manage_user(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        user_id = int(command.args or "")
+    except ValueError:
+        await message.answer(f"Usage: <code>/{command.command} USER_ID</code>")
+        return
+    banned = command.command == "ban"
+    await db.db.users.update_one({"user_id": user_id}, {"$set": {"user_id": user_id, "banned": banned}}, upsert=True)
+    await message.answer(f"✅ User <code>{user_id}</code> {'banned' if banned else 'unbanned'}.")
+
+
+@router.message(Command("closerequest"))
+async def close_request(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        request_id = ObjectId(command.args or "")
+    except Exception:
+        await message.answer("Usage: <code>/closerequest REQUEST_ID</code>")
+        return
+    result = await db.db.requests.update_one({"_id": request_id}, {"$set": {"status": "closed", "closed_at": datetime.now(timezone.utc)}})
+    await message.answer("✅ Request closed." if result.matched_count else "Request not found.")
+
+
+@router.message(Command("broadcast"))
+async def broadcast(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    text = (command.args or "").strip()
+    if not text:
+        await message.answer("Usage: <code>/broadcast Your message</code>")
+        return
+    sent = failed = 0
+    async for user in db.db.users.find({"banned": {"$ne": True}}):
+        try:
+            await message.bot.send_message(user["user_id"], text)
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.04)
+    await message.answer(f"<b>Broadcast complete</b>\nSent: {sent}\nFailed: {failed}")
 
 
 @router.callback_query(F.data.startswith("page:"))
@@ -191,10 +311,7 @@ async def request_missing(callback: CallbackQuery) -> None:
 async def stats(message: Message) -> None:
     if not is_owner(message.from_user.id):
         return
-    files = await db.db.files.count_documents({})
-    users = await db.db.users.count_documents({})
-    requests = await db.db.requests.count_documents({"status": "open"})
-    await message.answer(f"<b>Nexus stats</b>\nFiles: {files}\nUsers: {users}\nOpen requests: {requests}")
+    await message.answer(await owner_stats_text(), reply_markup=panel_keyboard())
 
 
 async def main() -> None:

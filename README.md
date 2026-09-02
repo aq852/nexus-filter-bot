@@ -7,7 +7,7 @@ A centrally managed Telegram search bot that anyone can add to a group. It searc
 - Search a unified library from any group where the bot is present
 - Index documents, media, apps, archives, and other authorized files from owner-approved source channels
 - Paginated results and private, user-bound delivery buttons that expire after ten minutes
-- Optional forced-subscription check, missing-file requests, and owner-only statistics
+- Optional forced-subscription check, missing-file requests, top-search analytics, broadcast, and an owner-only control panel
 - One owner-controlled configuration; group administrators do not manage separate libraries
 
 ## Technical direction
@@ -33,6 +33,6 @@ docs/           setup and operating notes
 4. Post authorized files to a source channel. The bot indexes its filename and caption automatically.
 5. Add the bot to any public group. Members can search by sending a title or filename.
 
-Useful owner command: `/stats`.
+Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broadcast`, `/ban`, `/unban`, and `/closerequest`.
 
 Only index and distribute content you own or are authorized to share.
