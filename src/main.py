@@ -21,6 +21,7 @@ from pymongo import ReturnDocument
 
 from .config import Settings, get_settings
 from .database import Database
+from .i18n import LANGUAGES, translate
 from .utils import media_category, media_kind, message_file, normalize_query
 
 router = Router()
@@ -32,6 +33,17 @@ bot_username: str | None = None
 
 def is_owner(user_id: int) -> bool:
     return user_id == settings.owner_id
+
+
+async def user_language(user_id: int) -> str:
+    user = await db.db.users.find_one({"user_id": user_id}, {"language": 1})
+    return (user or {}).get("language", "en")
+
+
+def language_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=name, callback_data=f"language:{code}") for code, name in LANGUAGES.items()
+    ]])
 
 
 def panel_keyboard() -> InlineKeyboardMarkup:
@@ -146,6 +158,7 @@ async def delete_later(message: Message) -> None:
 
 async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None, category: str | None = None) -> None:
     clean_query = normalize_query(query)
+    language = await user_language(user_id)
     await db.record_search(clean_query)
     files, total = await db.search(clean_query, page, settings.results_per_page, category)
     if not session_id:
@@ -156,7 +169,7 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
         ]])
         suggestions = await db.suggestions(clean_query)
         hint = "\n<b>Did you mean:</b> " + " • ".join(suggestions) if suggestions else ""
-        sent = await message.answer(f"No results for <b>{clean_query}</b>.{hint}", reply_markup=keyboard)
+        sent = await message.answer(f"{translate(language, 'no_results', query=clean_query)}{hint}", reply_markup=keyboard)
         asyncio.create_task(delete_later(sent))
         return
     first = page * settings.results_per_page + 1
@@ -176,6 +189,7 @@ async def start(message: Message, command: CommandObject) -> None:
         {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "last_seen": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    language = await user_language(message.from_user.id)
     payload = command.args or ""
     if payload.startswith("file_"):
         try:
@@ -186,18 +200,35 @@ async def start(message: Message, command: CommandObject) -> None:
             await message.answer("That inline result is no longer available. Please search again.")
             return
         if not await subscription_ok(message.bot, message.from_user.id):
-            await message.answer("Join the required updates channel first, then reopen this result.")
+            await message.answer(translate(language, "join_required"))
             return
         token = await db.make_download_token(str(file["_id"]), message.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+            InlineKeyboardButton(text=translate(language, "send_to_dm"), callback_data=f"send:{token}")
         ]])
         await message.answer(f"<b>{file['name']}</b>\nYour private delivery button is ready.", reply_markup=keyboard)
         return
-    await message.answer("Welcome to <b>NexusFilterBot</b>. Add me to a group, then send a file name or title to search the shared library.")
+    await message.answer(translate(language, "welcome"))
     popular = await db.top_searches(5)
     if popular:
         await message.answer("<b>Popular searches</b>\n" + "\n".join(f"• {item['query']}" for item in popular))
+
+
+@router.message(Command("language"))
+async def language_selector(message: Message) -> None:
+    language = await user_language(message.from_user.id)
+    await message.answer(translate(language, "choose_language"), reply_markup=language_keyboard())
+
+
+@router.callback_query(F.data.startswith("language:"))
+async def set_language(callback: CallbackQuery) -> None:
+    code = callback.data.split(":", 1)[1]
+    if code not in LANGUAGES:
+        await callback.answer("Unsupported language.", show_alert=True)
+        return
+    await db.db.users.update_one({"user_id": callback.from_user.id}, {"$set": {"language": code}}, upsert=True)
+    await callback.message.edit_text(translate(code, "language_saved", language=LANGUAGES[code]))
+    await callback.answer()
 
 
 @router.inline_query()
@@ -654,7 +685,7 @@ async def group_search(message: Message) -> None:
     if await db.db.users.find_one({"user_id": message.from_user.id, "banned": True}):
         return
     if not await subscription_ok(message.bot, message.from_user.id):
-        await message.reply("Join the required updates channel first, then try again.")
+        await message.reply(translate(await user_language(message.from_user.id), "join_required"))
         return
     if len(normalized) < 2:
         return
@@ -823,10 +854,11 @@ async def prepare_download(callback: CallbackQuery) -> None:
         await callback.answer("This file is unavailable or your subscription check failed.", show_alert=True)
         return
     token = await db.make_download_token(str(file["_id"]), callback.from_user.id)
+    language = await user_language(callback.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+        InlineKeyboardButton(text=translate(language, "send_to_dm"), callback_data=f"send:{token}")
     ]])
-    await callback.message.answer("Your private delivery link is ready for 10 minutes.", reply_markup=keyboard)
+    await callback.message.answer(translate(language, "delivery_ready"), reply_markup=keyboard)
     await callback.answer()
 
 

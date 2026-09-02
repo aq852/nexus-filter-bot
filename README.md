@@ -52,6 +52,10 @@ Set `STORAGE_CHANNEL_ID` to an owner-controlled channel where the bot is an admi
 
 Enable inline mode for the bot in BotFather using `/setinline`. After that, people can search from any Telegram chat with `@YourBotUsername title`. Each result uses a deep link that opens the bot privately; the user then completes the usual subscription check and receives a personal ten-minute delivery button.
 
+## Languages
+
+Users can run `/language` to choose English, Hindi, or Bengali. NexusFilterBot stores the choice for each user and uses it for onboarding, missing-result notices, subscription prompts, and private-delivery controls. New user-facing features can reuse the same translation layer.
+
 ## Scheduled broadcasts
 
 Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.
