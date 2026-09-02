@@ -44,6 +44,10 @@ Use `/recentfiles` or the **Recent files** control-panel button to get file IDs.
 - `/addtags FILE_ID | tag1 tag2` adds search tags such as language, quality, or topic.
 - `/removefile FILE_ID` removes a stale entry from the searchable index; it does not delete the original Telegram channel post.
 
+## Owner upload inbox
+
+Set `STORAGE_CHANNEL_ID` to an owner-controlled channel where the bot is an administrator. Then send a supported file to the bot in a private chat as the configured owner. The bot copies the file into that channel and indexes it immediately, so it is searchable in groups without manually posting it to a source channel.
+
 ## Scheduled broadcasts
 
 Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.

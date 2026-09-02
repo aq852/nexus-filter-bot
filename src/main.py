@@ -341,6 +341,44 @@ async def index_channel_file(message: Message) -> None:
         )
 
 
+@router.message(F.chat.type == ChatType.PRIVATE, F.document | F.video | F.audio | F.animation | F.photo)
+async def owner_upload_inbox(message: Message) -> None:
+    """Copy owner-uploaded files to the storage channel and index them immediately."""
+    if not is_owner(message.from_user.id):
+        return
+    if not settings.storage_channel_id:
+        await message.answer("Set <code>STORAGE_CHANNEL_ID</code> first, then restart the bot. The bot must be an admin in that channel.")
+        return
+    file_id, name = message_file(message)
+    if not file_id:
+        return
+    try:
+        storage = await message.bot.get_chat(settings.storage_channel_id)
+        copied = await message.bot.copy_message(settings.storage_channel_id, message.chat.id, message.message_id)
+    except Exception:
+        await message.answer("I could not copy this file. Confirm that the storage channel ID is correct and that I am an admin there.")
+        return
+    await db.add_source_channel(storage.id, storage.title)
+    caption = message.caption or ""
+    record = {
+        "source_chat_id": storage.id,
+        "source_message_id": copied.message_id,
+        "telegram_file_id": file_id,
+        "name": name or "file",
+        "kind": media_kind(message),
+        "category": media_category(message),
+        "caption": caption,
+        "search_text": normalize_query(f"{name or ''} {caption}"),
+        "created_at": datetime.now(timezone.utc),
+    }
+    await db.upsert_file(record)
+    await message.answer(
+        f"✅ Added to <b>{storage.title}</b> and indexed.\n\n"
+        f"Title: <b>{record['name']}</b>\n"
+        f"Manage it with <code>/recentfiles</code> if you want to rename it or add tags."
+    )
+
+
 @router.message(Command("setwelcome"))
 async def set_welcome(message: Message, command: CommandObject) -> None:
     if not await require_group_admin(message):
