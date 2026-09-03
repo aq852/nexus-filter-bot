@@ -76,7 +76,8 @@ async def owner_stats_text() -> str:
     request_state = "on" if request_setting.get("request_system_enabled", True) else "off"
     fsub_count = await db.db.force_sub_channels.count_documents({})
     premium = await db.db.users.count_documents({"premium_until": {"$gt": datetime.now(timezone.utc)}})
-    return f"<b>AkMovieVerse control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
+    verified = await db.db.users.count_documents({"verified_until": {"$gt": datetime.now(timezone.utc)}})
+    return f"<b>AkMovieVerse control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nVerified users: <b>{verified}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
 
 
 async def force_sub_channels() -> list[dict]:
@@ -931,6 +932,78 @@ async def delete_redeem_code(message: Message, command: CommandObject) -> None:
         return
     result = await db.db.redeem_codes.delete_one({"code": code})
     await message.answer("✅ Redeem code deleted." if result.deleted_count else "Code not found.")
+
+
+def local_time_text(value: datetime | None) -> str:
+    if not value:
+        return "Not active"
+    return value.astimezone(ZoneInfo(settings.timezone)).strftime("%d %b %Y, %I:%M %p")
+
+
+@router.message(Command("id"))
+async def show_ids(message: Message) -> None:
+    await message.answer(
+        f"<b>Your information</b>\n\n"
+        f"User ID: <code>{message.from_user.id}</code>\n"
+        f"Chat ID: <code>{message.chat.id}</code>\n"
+        f"Chat type: <b>{message.chat.type.value}</b>"
+    )
+
+
+@router.message(Command("userinfo"))
+async def user_info(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        user_id = int(command.args or "")
+    except ValueError:
+        await message.answer("Usage: <code>/userinfo USER_ID</code>")
+        return
+    user = await db.db.users.find_one({"user_id": user_id})
+    if not user:
+        await message.answer("No AkMovieVerse user record was found for that ID.")
+        return
+    now = datetime.now(timezone.utc)
+    premium = user.get("premium_until") if user.get("premium_until") and user["premium_until"] > now else None
+    verified = user.get("verified_until") if user.get("verified_until") and user["verified_until"] > now else None
+    await message.answer(
+        f"<b>User information</b>\n\n"
+        f"Name: <b>{escape(user.get('name') or 'Unknown')}</b>\n"
+        f"ID: <code>{user_id}</code>\n"
+        f"Language: <b>{LANGUAGES.get(user.get('language', 'en'), user.get('language', 'en'))}</b>\n"
+        f"Status: <b>{'banned' if user.get('banned') else 'active'}</b>\n"
+        f"Premium: <b>{local_time_text(premium)}</b>\n"
+        f"Verified: <b>{local_time_text(verified)}</b>\n"
+        f"Verification provider: <b>{escape(user.get('verification_provider') or '—')}</b>\n"
+        f"Successful referrals: <b>{user.get('referral_count', 0)}</b>\n"
+        f"Referred by: <code>{user.get('referred_by') or '—'}</code>"
+    )
+
+
+@router.message(Command("verifiedstats"))
+async def verified_stats(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    now = datetime.now(timezone.utc)
+    active = await db.db.users.count_documents({"verified_until": {"$gt": now}})
+    all_time = await db.db.users.count_documents({"verified_at": {"$exists": True}})
+    await message.answer(f"<b>Verification statistics</b>\n\nActive verified users: <b>{active}</b>\nUsers verified at least once: <b>{all_time}</b>")
+
+
+@router.message(Command("unverify"))
+async def unverify_user(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        user_id = int(command.args or "")
+    except ValueError:
+        await message.answer("Usage: <code>/unverify USER_ID</code>")
+        return
+    result = await db.db.users.update_one(
+        {"user_id": user_id},
+        {"$unset": {"verified_until": "", "verified_at": "", "verification_provider": ""}},
+    )
+    await message.answer("✅ Verification removed." if result.matched_count else "User not found.")
 
 
 @router.message(Command("addpremium"))

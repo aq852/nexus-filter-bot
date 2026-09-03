@@ -38,6 +38,7 @@ Anyone can add AkMovieVerse to a group and search one shared library. Only the o
 | Command | Use |
 | --- | --- |
 | `/start` | Start the bot or open a private delivery link |
+| `/id` | Show your Telegram ID and current chat ID |
 | `/language` | Choose English, Hindi, Bengali, Tamil, Telugu, Malayalam, Kannada, Marathi, or Urdu |
 | `/verify` | Get a shortlink-verification link when required |
 | `/myplan` | Check premium status and expiry |
@@ -70,6 +71,9 @@ Send a title or filename in a group, or directly in DM when private search is en
 | Command | Use |
 | --- | --- |
 | `/ban USER_ID` · `/unban USER_ID` | Control access |
+| `/userinfo USER_ID` | View language, premium, verification, and referral status |
+| `/verifiedstats` | Show active and all-time verified-user counts |
+| `/unverify USER_ID` | Revoke a user’s active verification |
 | `/addpremium USER_ID | 30d` | Grant or extend premium |
 | `/removepremium USER_ID` | Revoke premium |
 | `/premiumstats` | Count active premium users |
