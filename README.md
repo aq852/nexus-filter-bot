@@ -108,6 +108,10 @@ The owner can temporarily pause public search, inline results, verification link
 
 Users can search the shared library by sending a title or filename directly to AkMovieVerse in a private chat. This is enabled by default. The owner can use `/pmsearch off` to make searches group-only, `/pmsearch on` to restore it, or `/pmsearch` to view the current state. Private results use the same protected delivery, subscription, verification, and premium rules as group results.
 
+## Refer & Earn Premium
+
+The owner can enable referrals with `/referral on` and choose the reward with `/referral 3d` or another premium duration such as `12h`. Users run `/refer` to receive a personal deep link. When a genuine new user starts AkMovieVerse through that link, the referrer receives the configured premium time and a private confirmation. Use `/referral off` to pause the program. Existing users, self-referrals, banned users, and the owner do not receive a reward.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

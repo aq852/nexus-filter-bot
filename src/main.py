@@ -144,6 +144,32 @@ async def pm_search_enabled() -> bool:
     return configured.get("enabled", True)
 
 
+async def referral_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "referral"}) or {}
+    return {"enabled": configured.get("enabled", False), "reward_minutes": configured.get("reward_minutes", 1_440)}
+
+
+async def award_referral(bot: Bot, inviter_id: int, new_user_id: int) -> datetime | None:
+    config = await referral_settings()
+    if not config["enabled"] or inviter_id == new_user_id or inviter_id == settings.owner_id:
+        return None
+    inviter = await db.db.users.find_one({"user_id": inviter_id})
+    if not inviter or inviter.get("banned"):
+        return None
+    current = inviter.get("premium_until")
+    starts_at = current if current and current > datetime.now(timezone.utc) else datetime.now(timezone.utc)
+    until = starts_at + timedelta(minutes=int(config["reward_minutes"]))
+    await db.db.users.update_one(
+        {"user_id": inviter_id},
+        {"$set": {"premium_until": until, "premium_granted_at": datetime.now(timezone.utc)}, "$inc": {"referral_count": 1}},
+    )
+    try:
+        await bot.send_message(inviter_id, f"🎉 Your referral joined AkMovieVerse. You earned premium until <b>{until.astimezone(ZoneInfo(settings.timezone)):%d %b %Y, %I:%M %p}</b>.")
+    except Exception:
+        pass
+    return until
+
+
 async def react_to_group_message(message: Message) -> None:
     config = await auto_reaction_settings()
     if not config["enabled"]:
@@ -371,16 +397,24 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
 
 @router.message(Command("start"))
 async def start(message: Message, command: CommandObject) -> None:
-    await db.db.users.update_one(
+    payload = command.args or ""
+    user_update = await db.db.users.update_one(
         {"user_id": message.from_user.id},
         {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "last_seen": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    if user_update.upserted_id and payload.startswith("ref_"):
+        try:
+            inviter_id = int(payload.removeprefix("ref_"))
+        except ValueError:
+            inviter_id = 0
+        if inviter_id and inviter_id != message.from_user.id:
+            await db.db.users.update_one({"user_id": message.from_user.id}, {"$set": {"referred_by": inviter_id}})
+            await award_referral(message.bot, inviter_id, message.from_user.id)
     if await maintenance_active(message.from_user.id):
         await message.answer((await maintenance_settings())["message"])
         return
     language = await user_language(message.from_user.id)
-    payload = command.args or ""
     if payload.startswith("file_"):
         try:
             file = await db.db.files.find_one({"_id": ObjectId(payload.removeprefix("file_"))})
@@ -555,6 +589,43 @@ def parse_premium_duration(value: str) -> timedelta:
     if count < 1 or count > (3650 if unit == "d" else 87_600):
         raise ValueError
     return timedelta(days=count) if unit == "d" else timedelta(hours=count)
+
+
+@router.message(Command("refer"))
+async def referral_link(message: Message) -> None:
+    config = await referral_settings()
+    if not config["enabled"]:
+        await message.answer("Refer & Earn is not active right now.")
+        return
+    if not bot_username:
+        await message.answer("Referral links are temporarily unavailable. Please try again soon.")
+        return
+    user = await db.db.users.find_one({"user_id": message.from_user.id}, {"referral_count": 1}) or {}
+    link = f"https://t.me/{bot_username}?start=ref_{message.from_user.id}"
+    await message.answer(f"<b>Refer & Earn Premium</b>\n\nShare your personal link:\n<code>{link}</code>\n\nWhen a new user starts AkMovieVerse through it, you earn premium time. Successful referrals: <b>{user.get('referral_count', 0)}</b>")
+
+
+@router.message(Command("referral"))
+async def manage_referrals(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw = (command.args or "").strip().lower()
+    if not raw:
+        config = await referral_settings()
+        await message.answer(f"Refer & Earn is <b>{'on' if config['enabled'] else 'off'}</b>; reward: <b>{config['reward_minutes']} minutes</b>.\n\nUse <code>/referral on</code>, <code>/referral off</code>, or <code>/referral 3d</code> to set the reward.")
+        return
+    if raw in {"on", "off"}:
+        await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"enabled": raw == "on"}}, upsert=True)
+        await message.answer(f"✅ Refer & Earn is now <b>{raw}</b>.")
+        return
+    try:
+        reward = parse_premium_duration(raw)
+    except ValueError:
+        await message.answer("Usage: <code>/referral on</code>, <code>/referral off</code>, or <code>/referral 3d</code>.")
+        return
+    minutes = int(reward.total_seconds() // 60)
+    await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
+    await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
 
 
 @router.message(Command("addpremium"))
