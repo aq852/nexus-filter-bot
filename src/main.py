@@ -127,6 +127,18 @@ async def auto_reaction_settings() -> dict:
     return {"enabled": configured.get("enabled", False), "emoji": configured.get("emoji", "👍")}
 
 
+async def maintenance_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "maintenance"}) or {}
+    return {
+        "enabled": configured.get("enabled", False),
+        "message": configured.get("message", "AkMovieVerse is temporarily under maintenance. Please try again soon."),
+    }
+
+
+async def maintenance_active(user_id: int) -> bool:
+    return not is_owner(user_id) and (await maintenance_settings())["enabled"]
+
+
 async def react_to_group_message(message: Message) -> None:
     config = await auto_reaction_settings()
     if not config["enabled"]:
@@ -359,6 +371,9 @@ async def start(message: Message, command: CommandObject) -> None:
         {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "last_seen": datetime.now(timezone.utc)}},
         upsert=True,
     )
+    if await maintenance_active(message.from_user.id):
+        await message.answer((await maintenance_settings())["message"])
+        return
     language = await user_language(message.from_user.id)
     payload = command.args or ""
     if payload.startswith("file_"):
@@ -394,6 +409,9 @@ async def language_selector(message: Message) -> None:
 
 @router.message(Command("verify"))
 async def verify_access(message: Message) -> None:
+    if await maintenance_active(message.from_user.id):
+        await message.answer((await maintenance_settings())["message"])
+        return
     if await premium_until(message.from_user.id):
         await message.answer("You have premium access, so shortlink verification is not required.")
         return
@@ -482,6 +500,27 @@ async def auto_reaction_status(message: Message) -> None:
         return
     current = await auto_reaction_settings()
     await message.answer(f"<b>Auto reaction</b>: <b>{'on' if current['enabled'] else 'off'}</b>\nEmoji: {current['emoji']}\n\nUse <code>/autoreaction on</code> or <code>/reactionemoji ❤️</code>.")
+
+
+@router.message(Command("maintenance"))
+async def manage_maintenance(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw = (command.args or "").strip()
+    if not raw:
+        current = await maintenance_settings()
+        await message.answer(f"Maintenance mode is <b>{'on' if current['enabled'] else 'off'}</b>.\nNotice: {current['message']}\n\nUse <code>/maintenance on | Notice</code> or <code>/maintenance off</code>.")
+        return
+    choice, _, notice = raw.partition("|")
+    choice = choice.strip().lower()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/maintenance on | Optional notice</code> or <code>/maintenance off</code>")
+        return
+    update = {"enabled": choice == "on"}
+    if notice.strip():
+        update["message"] = notice.strip()[:500]
+    await db.db.bot_settings.update_one({"_id": "maintenance"}, {"$set": update}, upsert=True)
+    await message.answer(f"✅ Maintenance mode is now <b>{choice}</b>.")
 
 
 def parse_premium_duration(value: str) -> timedelta:
@@ -641,6 +680,9 @@ async def set_language(callback: CallbackQuery) -> None:
 
 @router.inline_query()
 async def inline_search(inline_query: InlineQuery) -> None:
+    if await maintenance_active(inline_query.from_user.id):
+        await inline_query.answer([], cache_time=5, is_personal=True, switch_pm_text="AkMovieVerse is under maintenance", switch_pm_parameter="maintenance")
+        return
     query = normalize_query(inline_query.query)
     if len(query) < 2 or not bot_username:
         await inline_query.answer([], cache_time=5, is_personal=True, switch_pm_text="Type at least two characters to search", switch_pm_parameter="search")
@@ -1216,6 +1258,8 @@ async def welcome_new_members(message: Message) -> None:
 
 @router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text, ~F.text.startswith("/"))
 async def group_search(message: Message) -> None:
+    if await maintenance_active(message.from_user.id):
+        return
     group = await db.db.groups.find_one({"chat_id": message.chat.id}) or {}
     normalized = normalize_query(message.text)
     lower_text = normalized.lower()
@@ -1413,6 +1457,9 @@ async def filter_results(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("file:"))
 async def prepare_download(callback: CallbackQuery) -> None:
+    if await maintenance_active(callback.from_user.id):
+        await callback.answer((await maintenance_settings())["message"], show_alert=True)
+        return
     file = await db.db.files.find_one({"_id": ObjectId(callback.data.split(":", 1)[1])})
     if not file:
         await callback.answer("This file is unavailable.", show_alert=True)
@@ -1435,6 +1482,9 @@ async def prepare_download(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("send:"))
 async def send_file(callback: CallbackQuery) -> None:
+    if await maintenance_active(callback.from_user.id):
+        await callback.answer((await maintenance_settings())["message"], show_alert=True)
+        return
     token = await db.get_download_token(callback.data.split(":", 1)[1], callback.from_user.id)
     if not token:
         await callback.answer("This delivery link expired or is unavailable.", show_alert=True)

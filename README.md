@@ -100,6 +100,10 @@ Use `/autocleanup on` to skip new posts whose names or captions look like PreDVD
 
 The owner can enable a small reaction on new non-command text messages in every group with `/autoreaction on`; turn it off with `/autoreaction off`. Set the standard Telegram emoji using `/reactionemoji 👍` and check the setting with `/reactionstatus`. The bot must have permission to react in the group, and Telegram may limit reactions to the emojis allowed by that group.
 
+## Maintenance mode
+
+The owner can temporarily pause public search, inline results, verification links, and private file delivery with `/maintenance on | Optional notice`. Owner commands continue to work, so you can update source channels and settings while the pause is active. Run `/maintenance off` to restore normal use, or `/maintenance` to inspect the current notice and state.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
