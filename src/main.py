@@ -2595,7 +2595,12 @@ async def main() -> None:
     global bot_username, db, settings
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     settings = get_settings()
-    db = Database(settings.mongodb_uri, settings.mongodb_database)
+    db = Database(
+        settings.mongodb_uri,
+        settings.mongodb_database,
+        settings.secondary_mongodb_uri,
+        settings.secondary_mongodb_database,
+    )
     await db.connect()
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
     bot_username = (await bot.get_me()).username

@@ -162,6 +162,8 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 | `OWNER_ID` | Yes | Numeric Telegram owner ID |
 | `MONGODB_URI` | Yes | MongoDB connection string |
 | `MONGODB_DATABASE` | Yes | Database name |
+| `SECONDARY_MONGODB_URI` | No | Separate MongoDB connection for indexed files/search |
+| `SECONDARY_MONGODB_DATABASE` | No | Database name for the second file index |
 | `STORAGE_CHANNEL_ID` | No | Owner private-upload storage channel |
 | `UPDATES_CHANNEL_ID` | No | New-file update channel |
 | `DELETION_LOG_CHANNEL_ID` | No | Index-cleanup audit channel |
@@ -177,5 +179,6 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 - Free users can save up to 3 search alerts; premium users can save up to 20.
 - Free-user file-size rules apply to files indexed after this feature is deployed, because older records may not include Telegram’s file-size value.
 - Retention cleanup removes only old MongoDB index records; it never deletes the original Telegram channel posts.
+- To enable dual MongoDB, configure both `SECONDARY_MONGODB_URI` and `SECONDARY_MONGODB_DATABASE`. The primary database keeps users and settings; the secondary database contains only indexed file records and search indexes.
 - Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
 - Only index and distribute files that you own or are authorized to share.

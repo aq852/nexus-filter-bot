@@ -8,6 +8,9 @@ class Settings(BaseSettings):
     owner_id: int
     mongodb_uri: str = "mongodb://localhost:27017"
     mongodb_database: str = "telegram_autofilter"
+    # Optional separate MongoDB database used only for indexed files and search.
+    secondary_mongodb_uri: str | None = None
+    secondary_mongodb_database: str | None = None
     force_sub_channel_id: int | None = None
     results_per_page: int = 8
     auto_delete_seconds: int = 0

@@ -7,15 +7,33 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from pymongo import ReturnDocument
 
 
+class DatabaseView:
+    """Expose primary collections normally while routing only ``files`` elsewhere."""
+
+    def __init__(self, primary: AsyncIOMotorDatabase, files_collection) -> None:
+        self.primary = primary
+        self.files = files_collection
+
+    def __getattr__(self, name: str):
+        return getattr(self.primary, name)
+
+
 class Database:
-    def __init__(self, uri: str, name: str) -> None:
+    def __init__(self, uri: str, name: str, secondary_uri: str | None = None, secondary_name: str | None = None) -> None:
         self.client = AsyncIOMotorClient(uri)
-        self.db: AsyncIOMotorDatabase = self.client[name]
+        self.primary_db: AsyncIOMotorDatabase = self.client[name]
+        self.files_client = AsyncIOMotorClient(secondary_uri) if secondary_uri and secondary_name else self.client
+        self.files_db: AsyncIOMotorDatabase = self.files_client[secondary_name] if secondary_uri and secondary_name else self.primary_db
+        self.files = self.files_db.files
+        self.uses_secondary_files_db = self.files_db is not self.primary_db
+        self.db = DatabaseView(self.primary_db, self.files)
 
     async def connect(self) -> None:
         await self.db.command("ping")
-        await self.db.files.create_index([("search_text", "text")])
-        await self.db.files.create_index([("source_chat_id", 1), ("source_message_id", 1)], unique=True)
+        if self.uses_secondary_files_db:
+            await self.files_db.command("ping")
+        await self.files.create_index([("search_text", "text")])
+        await self.files.create_index([("source_chat_id", 1), ("source_message_id", 1)], unique=True)
         await self.db.users.create_index("user_id", unique=True)
         await self.db.users.create_index("premium_until")
         await self.db.redeem_codes.create_index("code", unique=True)
@@ -38,6 +56,8 @@ class Database:
 
     async def close(self) -> None:
         self.client.close()
+        if self.files_client is not self.client:
+            self.files_client.close()
 
     async def create_verification_token(self, user_id: int, provider: str, minutes: int) -> str:
         result = await self.db.verification_tokens.insert_one({
@@ -70,7 +90,7 @@ class Database:
         )
 
     async def upsert_file(self, record: dict):
-        return await self.db.files.update_one(
+        return await self.files.update_one(
             {"source_chat_id": record["source_chat_id"], "source_message_id": record["source_message_id"]},
             {"$set": record},
             upsert=True,
@@ -81,15 +101,15 @@ class Database:
         selector = {"$text": {"$search": words}} if words else {}
         if category:
             selector["category"] = category
-        total = await self.db.files.count_documents(selector)
-        cursor = self.db.files.find(selector, {"score": {"$meta": "textScore"}}).sort(
+        total = await self.files.count_documents(selector)
+        cursor = self.files.find(selector, {"score": {"$meta": "textScore"}}).sort(
             [("score", {"$meta": "textScore"}), ("created_at", -1)]
         )
         return await cursor.skip(page * size).limit(size).to_list(length=size), total
 
     async def suggestions(self, query: str, limit: int = 3) -> list[str]:
         """Return a small set of close filename matches without a costly full-library scan."""
-        candidates = await self.db.files.find({}, {"name": 1}).sort("created_at", -1).limit(250).to_list(length=250)
+        candidates = await self.files.find({}, {"name": 1}).sort("created_at", -1).limit(250).to_list(length=250)
         scored: list[tuple[float, str]] = []
         needle = query.lower()
         for item in candidates:
