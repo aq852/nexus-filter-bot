@@ -71,7 +71,8 @@ async def owner_stats_text() -> str:
     request_setting = await db.db.bot_settings.find_one({"_id": "global"}) or {}
     request_state = "on" if request_setting.get("request_system_enabled", True) else "off"
     fsub_count = await db.db.force_sub_channels.count_documents({})
-    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
+    premium = await db.db.users.count_documents({"premium_until": {"$gt": datetime.now(timezone.utc)}})
+    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
 
 
 async def force_sub_channels() -> list[dict]:
@@ -110,7 +111,15 @@ async def verification_settings() -> dict:
     return await db.db.bot_settings.find_one({"_id": "verification"}) or {"enabled": False, "valid_minutes": 720}
 
 
+async def premium_until(user_id: int) -> datetime | None:
+    user = await db.db.users.find_one({"user_id": user_id}, {"premium_until": 1}) or {}
+    until = user.get("premium_until")
+    return until if until and until > datetime.now(timezone.utc) else None
+
+
 async def verification_ok(user_id: int) -> bool:
+    if await premium_until(user_id):
+        return True
     config = await verification_settings()
     if not config.get("enabled", False):
         return True
@@ -332,6 +341,9 @@ async def language_selector(message: Message) -> None:
 
 @router.message(Command("verify"))
 async def verify_access(message: Message) -> None:
+    if await premium_until(message.from_user.id):
+        await message.answer("You have premium access, so shortlink verification is not required.")
+        return
     if await verification_ok(message.from_user.id):
         await message.answer("Your access is already verified.")
         return
@@ -340,6 +352,78 @@ async def verify_access(message: Message) -> None:
         await message.answer("Verification is unavailable right now. Please contact the owner.")
         return
     await message.answer("Complete verification, then return here. Your verified access lasts for the owner-selected time.", reply_markup=keyboard)
+
+
+def parse_premium_duration(value: str) -> timedelta:
+    raw = value.strip().lower()
+    if raw.endswith("d"):
+        amount, unit = raw[:-1], "d"
+    elif raw.endswith("h"):
+        amount, unit = raw[:-1], "h"
+    else:
+        raise ValueError
+    count = int(amount)
+    if count < 1 or count > (3650 if unit == "d" else 87_600):
+        raise ValueError
+    return timedelta(days=count) if unit == "d" else timedelta(hours=count)
+
+
+@router.message(Command("addpremium"))
+async def add_premium(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_user, raw_duration = [part.strip() for part in (command.args or "").split("|", 1)]
+        user_id = int(raw_user)
+        duration = parse_premium_duration(raw_duration)
+    except (ValueError, TypeError):
+        await message.answer("Usage: <code>/addpremium USER_ID | 30d</code>\nUse hours (<code>12h</code>) or days (<code>30d</code>).")
+        return
+    current = await premium_until(user_id)
+    starts_at = current or datetime.now(timezone.utc)
+    until = starts_at + duration
+    await db.db.users.update_one(
+        {"user_id": user_id},
+        {"$set": {"user_id": user_id, "premium_until": until, "premium_granted_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    await message.answer(f"✅ Premium enabled for <code>{user_id}</code> until <b>{until.astimezone(ZoneInfo(settings.timezone)):%d %b %Y, %I:%M %p}</b>.")
+    try:
+        await message.bot.send_message(user_id, f"🎉 Premium access is active until <b>{until.astimezone(ZoneInfo(settings.timezone)):%d %b %Y, %I:%M %p}</b>. You can now bypass shortlink verification.")
+    except Exception:
+        pass
+
+
+@router.message(Command("removepremium"))
+async def remove_premium(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        user_id = int(command.args or "")
+    except ValueError:
+        await message.answer("Usage: <code>/removepremium USER_ID</code>")
+        return
+    result = await db.db.users.update_one({"user_id": user_id}, {"$unset": {"premium_until": "", "premium_granted_at": ""}})
+    await message.answer("✅ Premium removed." if result.matched_count else "User not found.")
+
+
+@router.message(Command("myplan"))
+async def my_plan(message: Message) -> None:
+    until = await premium_until(message.from_user.id)
+    if not until:
+        await message.answer("You are using the free plan. Ask the owner if premium access is available.")
+        return
+    local_until = until.astimezone(ZoneInfo(settings.timezone))
+    remaining = until - datetime.now(timezone.utc)
+    await message.answer(f"<b>Premium active</b> ✅\nExpires: <b>{local_until:%d %b %Y, %I:%M %p}</b>\nRemaining: <b>{max(1, int(remaining.total_seconds() // 3600))} hours</b>\n\nShortlink verification is bypassed.")
+
+
+@router.message(Command("premiumstats"))
+async def premium_stats(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    active = await db.db.users.count_documents({"premium_until": {"$gt": datetime.now(timezone.utc)}})
+    await message.answer(f"<b>Premium members</b>: <b>{active}</b> active\n\nManage: <code>/addpremium USER_ID | 30d</code>\nRemove: <code>/removepremium USER_ID</code>")
 
 
 @router.message(Command("verification"))

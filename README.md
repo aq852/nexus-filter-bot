@@ -78,6 +78,12 @@ Add one or more compatible redirect providers with `/addshortener Name | https:/
 
 Enable the gate with `/verification on | 720`, where the final number is the verified-access period in minutes (5–43,200). Use `/verification off` to remove the gate. Users can run `/verify` if they need a fresh verification link. This generic redirect-template adapter supports many simple shorteners; providers that only expose a proprietary API will need their own adapter and API key, which should be stored as a Koyeb environment secret rather than sent in Telegram.
 
+## Premium membership
+
+Premium is manual and does not use Telegram Stars or a payment provider. The owner can grant it with `/addpremium USER_ID | 30d` (or an hourly duration such as `12h`); extending an active plan adds time to its existing expiry. Use `/removepremium USER_ID` to revoke it and `/premiumstats` to see the active count. Users check their plan with `/myplan`.
+
+Premium users automatically bypass shortlink verification. This gives a useful premium benefit now while leaving payment methods, referral rewards, and redeem codes for a later phase.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
