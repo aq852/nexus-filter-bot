@@ -84,6 +84,12 @@ Premium is manual and does not use Telegram Stars or a payment provider. The own
 
 Premium users automatically bypass shortlink verification. This gives a useful premium benefit now while leaving payment methods, referral rewards, and redeem codes for a later phase.
 
+## Delivery safety controls
+
+The owner can control private-file safety globally. Use `/autodelete SECONDS` to delete new search-result messages and files delivered by the bot after a chosen delay; use `0` to disable it (maximum `604800`, or seven days). Use `/protection on` to ask Telegram to prevent forwarding and saving of newly delivered private files, or `/protection off` to disable that restriction. Check the current values with `/deliverysettings`.
+
+Telegram applies these controls to messages sent by the bot; it cannot delete copies or downloads a user made before the timer runs out.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

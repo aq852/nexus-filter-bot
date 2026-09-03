@@ -107,6 +107,14 @@ async def request_system_enabled() -> bool:
     return setting.get("request_system_enabled", True) if setting else True
 
 
+async def delivery_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "delivery"}) or {}
+    return {
+        "auto_delete_seconds": configured.get("auto_delete_seconds", settings.auto_delete_seconds),
+        "protect_content": configured.get("protect_content", False),
+    }
+
+
 async def verification_settings() -> dict:
     return await db.db.bot_settings.find_one({"_id": "verification"}) or {"enabled": False, "valid_minutes": 720}
 
@@ -240,13 +248,18 @@ def result_keyboard(files: list[dict], session_id: str, page: int, total: int, c
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-async def delete_later(message: Message) -> None:
-    if settings.auto_delete_seconds:
-        await asyncio.sleep(settings.auto_delete_seconds)
+async def delete_message_later(bot: Bot, chat_id: int, message_id: int) -> None:
+    seconds = (await delivery_settings())["auto_delete_seconds"]
+    if seconds:
+        await asyncio.sleep(seconds)
         try:
-            await message.delete()
+            await bot.delete_message(chat_id, message_id)
         except Exception:
             pass
+
+
+async def delete_later(message: Message) -> None:
+    await delete_message_later(message.bot, message.chat.id, message.message_id)
 
 
 async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
@@ -352,6 +365,49 @@ async def verify_access(message: Message) -> None:
         await message.answer("Verification is unavailable right now. Please contact the owner.")
         return
     await message.answer("Complete verification, then return here. Your verified access lasts for the owner-selected time.", reply_markup=keyboard)
+
+
+@router.message(Command("autodelete"))
+async def set_auto_delete(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        seconds = int(command.args or "")
+        if not 0 <= seconds <= 604_800:
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/autodelete SECONDS</code>\nUse <code>0</code> to disable, up to 604800 (7 days).")
+        return
+    await db.db.bot_settings.update_one({"_id": "delivery"}, {"$set": {"auto_delete_seconds": seconds}}, upsert=True)
+    if seconds:
+        await message.answer(f"✅ Search results and delivered files will auto-delete after <b>{seconds} seconds</b> when Telegram permits it.")
+    else:
+        await message.answer("✅ Auto-delete is disabled.")
+
+
+@router.message(Command("protection"))
+async def set_forward_protection(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").lower().strip()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/protection on</code> or <code>/protection off</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "delivery"}, {"$set": {"protect_content": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Forward protection is <b>{choice}</b> for newly delivered files.")
+
+
+@router.message(Command("deliverysettings"))
+async def show_delivery_settings(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    current = await delivery_settings()
+    await message.answer(
+        "<b>Delivery safety settings</b>\n\n"
+        f"Auto-delete: <b>{current['auto_delete_seconds']} seconds</b>\n"
+        f"Forward protection: <b>{'on' if current['protect_content'] else 'off'}</b>\n\n"
+        "Set: <code>/autodelete SECONDS</code>\nProtect: <code>/protection on</code>"
+    )
 
 
 def parse_premium_duration(value: str) -> timedelta:
@@ -1238,7 +1294,13 @@ async def send_file(callback: CallbackQuery) -> None:
         return
     file = await db.db.files.find_one({"_id": ObjectId(token["file_id"])})
     try:
-        await callback.bot.copy_message(callback.from_user.id, file["source_chat_id"], file["source_message_id"])
+        delivered = await callback.bot.copy_message(
+            callback.from_user.id,
+            file["source_chat_id"],
+            file["source_message_id"],
+            protect_content=(await delivery_settings())["protect_content"],
+        )
+        asyncio.create_task(delete_message_later(callback.bot, callback.from_user.id, delivered.message_id))
     except Exception:
         await callback.answer("Start the bot in private chat first, then try again.", show_alert=True)
         return
