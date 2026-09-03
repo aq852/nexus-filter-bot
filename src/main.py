@@ -262,6 +262,40 @@ async def auto_metadata_enabled() -> bool:
     return configured.get("enabled", False)
 
 
+async def update_template_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "update_template"}) or {}
+    return {
+        "enabled": configured.get("enabled", False),
+        "movie_template": configured.get("movie_template"),
+        "series_template": configured.get("series_template"),
+    }
+
+
+async def custom_update_text(record: dict) -> str | None:
+    metadata = record.get("tmdb") or {}
+    content_type = "movie" if metadata.get("type") == "movie" else "series" if metadata.get("type") == "tv" else None
+    if not content_type:
+        return None
+    config = await update_template_settings()
+    template = config.get(f"{content_type}_template")
+    if not config["enabled"] or not template:
+        return None
+    values = {
+        "title": escape(metadata.get("title") or record["name"]),
+        "year": escape(str(metadata.get("year") or "—")),
+        "rating": escape(f"{metadata['rating']:.1f}/10") if isinstance(metadata.get("rating"), (int, float)) and metadata.get("rating") else "—",
+        "type": "Movie" if content_type == "movie" else "Series",
+        "file_name": escape(record["name"]),
+        "caption": escape(record.get("caption") or ""),
+        "tags": " ".join(f"#{escape(tag)}" for tag in record.get("tags", [])[:8]),
+        "overview": escape(metadata.get("overview") or ""),
+    }
+    try:
+        return template.format(**values).strip()[:1024]
+    except (KeyError, ValueError):
+        return None
+
+
 def tmdb_query_from_filename(name: str) -> str:
     title = re.sub(r"\[[^]]*\]|\([^)]*\)", " ", name)
     title = re.sub(r"\.(mkv|mp4|avi|webm|mov)$", "", title, flags=re.IGNORECASE)
@@ -572,13 +606,16 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
     tags = " ".join(f"#{tag}" for tag in record.get("tags", [])[:8])
     caption_preview = escape(record.get("caption", "").strip()[:250])
     metadata = record.get("tmdb") or {}
-    if metadata:
+    template_text = await custom_update_text(record)
+    if template_text:
+        text = template_text
+    elif metadata:
         rating = metadata.get("rating")
         rating_text = f"\nRating: <b>{rating:.1f}/10</b>" if isinstance(rating, (int, float)) and rating else ""
         text = f"<b>New in AkMovieVerse</b>\n\n<b>{escape(metadata['title'])}</b> ({metadata.get('year') or '—'})\nType: <b>{metadata.get('type', 'video').title()}</b>{rating_text}\n\n{escape(metadata.get('overview') or record['name'])[:500]}"
     else:
         text = f"<b>New in AkMovieVerse</b>\n\n{record['kind']} <b>{escape(record['name'])}</b>"
-    if caption_preview:
+    if caption_preview and not template_text:
         text += f"\n\n{caption_preview}"
     if tags:
         text += f"\n\n{tags}"
@@ -874,6 +911,55 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     minutes = int(reward.total_seconds() // 60)
     await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
+
+
+@router.message(Command("setposttemplate"))
+async def set_update_post_template(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_type, template = (command.args or "").split("|", 1)
+        content_type = raw_type.strip().lower()
+        template = template.strip()
+        if content_type not in {"movie", "series"} or not template or len(template) > 1024:
+            raise ValueError
+        template.format(title="Title", year="2026", rating="8.0/10", type="Movie", file_name="file.mkv", caption="Caption", tags="#tag", overview="Overview")
+    except (ValueError, KeyError):
+        await message.answer("Usage: <code>/setposttemplate movie | &lt;b&gt;{title}&lt;/b&gt; ({year})\nRating: {rating}\n\n{overview}\n\n{tags}</code>\nUse <code>movie</code> or <code>series</code> and placeholders: <code>{title}</code>, <code>{year}</code>, <code>{rating}</code>, <code>{type}</code>, <code>{file_name}</code>, <code>{caption}</code>, <code>{overview}</code>, <code>{tags}</code>.")
+        return
+    await db.db.bot_settings.update_one({"_id": "update_template"}, {"$set": {f"{content_type}_template": template}}, upsert=True)
+    await message.answer(f"✅ {content_type.title()} update template saved. Turn templates on with <code>/posttemplate on</code>.")
+
+
+@router.message(Command("posttemplate"))
+async def toggle_update_post_templates(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if choice not in {"on", "off"}:
+        config = await update_template_settings()
+        available = ", ".join(name for name in ("movie" if config["movie_template"] else "", "series" if config["series_template"] else "") if name) or "none"
+        await message.answer(f"Custom update templates are <b>{'on' if config['enabled'] else 'off'}</b>. Saved templates: <b>{available}</b>.\nUse <code>/posttemplate on</code> or <code>/posttemplate off</code>.")
+        return
+    if choice == "on":
+        config = await update_template_settings()
+        if not config["movie_template"] and not config["series_template"]:
+            await message.answer("Save a movie or series template first with <code>/setposttemplate TYPE | template</code>.")
+            return
+    await db.db.bot_settings.update_one({"_id": "update_template"}, {"$set": {"enabled": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Custom update templates are now <b>{choice}</b>.")
+
+
+@router.message(Command("clearposttemplate"))
+async def clear_update_post_template(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    content_type = (command.args or "").strip().lower()
+    if content_type not in {"movie", "series"}:
+        await message.answer("Usage: <code>/clearposttemplate movie</code> or <code>/clearposttemplate series</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "update_template"}, {"$unset": {f"{content_type}_template": ""}}, upsert=True)
+    await message.answer(f"✅ {content_type.title()} update template cleared.")
 
 
 @router.message(Command("autometa"))
