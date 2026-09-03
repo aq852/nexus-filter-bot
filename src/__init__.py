@@ -1,1 +1,1 @@
-"""NexusFilterBot application package."""
+"""AkMovieVerse application package."""

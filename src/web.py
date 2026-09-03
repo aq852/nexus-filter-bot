@@ -19,7 +19,7 @@ async def lifespan(app: FastAPI):
     await app.state.db.close()
 
 
-app = FastAPI(title="Nexus verification", lifespan=lifespan)
+app = FastAPI(title="AkMovieVerse verification", lifespan=lifespan)
 
 
 @app.get("/health")

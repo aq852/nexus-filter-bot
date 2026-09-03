@@ -72,7 +72,7 @@ async def owner_stats_text() -> str:
     request_state = "on" if request_setting.get("request_system_enabled", True) else "off"
     fsub_count = await db.db.force_sub_channels.count_documents({})
     premium = await db.db.users.count_documents({"premium_until": {"$gt": datetime.now(timezone.utc)}})
-    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
+    return f"<b>AkMovieVerse control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
 
 
 async def force_sub_channels() -> list[dict]:
@@ -255,7 +255,7 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
         return
     tags = " ".join(f"#{tag}" for tag in record.get("tags", [])[:8])
     caption_preview = record.get("caption", "").strip()[:250]
-    text = f"<b>New in Nexus</b>\n\n{record['kind']} <b>{record['name']}</b>"
+    text = f"<b>New in AkMovieVerse</b>\n\n{record['kind']} <b>{record['name']}</b>"
     if caption_preview:
         text += f"\n\n{caption_preview}"
     if tags:
@@ -263,7 +263,7 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
     keyboard = None
     if bot_username:
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="🔎 Open in NexusFilterBot", url=f"https://t.me/{bot_username}?start=file_{file_id}")
+            InlineKeyboardButton(text="🔎 Open in AkMovieVerse", url=f"https://t.me/{bot_username}?start=file_{file_id}")
         ]])
     try:
         await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
@@ -525,7 +525,7 @@ async def inline_search(inline_query: InlineQuery) -> None:
             title=file["name"][:64],
             description=f"{file['kind']} · Open privately for delivery",
             input_message_content=InputTextMessageContent(
-                message_text=f"<b>{file['name']}</b>\nPrivate delivery is available from NexusFilterBot.",
+                message_text=f"<b>{file['name']}</b>\nPrivate delivery is available from AkMovieVerse.",
                 parse_mode=ParseMode.HTML,
             ),
             reply_markup=InlineKeyboardMarkup(inline_keyboard=[[

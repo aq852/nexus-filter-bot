@@ -1,4 +1,4 @@
-# Telegram AutoFilter Bot
+# AkMovieVerse
 
 A centrally managed Telegram search bot that anyone can add to a group. It searches one shared library of files indexed from the owner's approved source channels.
 
@@ -62,7 +62,7 @@ Enable inline mode for the bot in BotFather using `/setinline`. After that, peop
 
 ## Languages
 
-Users can run `/language` to choose English, Hindi, or Bengali. NexusFilterBot stores the choice for each user and uses it for onboarding, missing-result notices, subscription prompts, and private-delivery controls. New user-facing features can reuse the same translation layer.
+Users can run `/language` to choose English, Hindi, or Bengali. AkMovieVerse stores the choice for each user and uses it for onboarding, missing-result notices, subscription prompts, and private-delivery controls. New user-facing features can reuse the same translation layer.
 
 ## Scheduled broadcasts
 
@@ -74,7 +74,7 @@ Group-admin commands: `/settings`, `/setwelcome`, `/clearwelcome`, `/setrules`, 
 
 The verification system is disabled by default. It is built around a public callback URL, so deploy this repository twice on Koyeb: keep the bot as a **Worker** with `python -m src.main`, then create a **Web** service from the same repository using `uvicorn src.web:app --host 0.0.0.0 --port $PORT`. Copy the Web service's default `https://…koyeb.app` address into `VERIFY_BASE_URL` for both services.
 
-Add one or more compatible redirect providers with `/addshortener Name | https://provider.example/?url={url} | 09:00-23:00`. The `{url}` placeholder is replaced with a secure one-time Nexus callback; the time window is optional and uses `TIMEZONE`. Use `/shorteners` to inspect providers and `/shortener Name | on` or `/shortener Name | off` to change availability. Nexus picks an enabled provider in an active window and rotates by least-recent use.
+Add one or more compatible redirect providers with `/addshortener Name | https://provider.example/?url={url} | 09:00-23:00`. The `{url}` placeholder is replaced with a secure one-time AkMovieVerse callback; the time window is optional and uses `TIMEZONE`. Use `/shorteners` to inspect providers and `/shortener Name | on` or `/shortener Name | off` to change availability. AkMovieVerse picks an enabled provider in an active window and rotates by least-recent use.
 
 Enable the gate with `/verification on | 720`, where the final number is the verified-access period in minutes (5–43,200). Use `/verification off` to remove the gate. Users can run `/verify` if they need a fresh verification link. This generic redirect-template adapter supports many simple shorteners; providers that only expose a proprietary API will need their own adapter and API key, which should be stored as a Koyeb environment secret rather than sent in Telegram.
 

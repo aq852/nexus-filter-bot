@@ -8,7 +8,7 @@ MESSAGES = {
     "en": {
         "choose_language": "Choose your language:",
         "language_saved": "✅ Language saved: {language}",
-        "welcome": "Welcome to <b>NexusFilterBot</b>. Add me to a group, then send a file name or title to search the shared library.",
+        "welcome": "Welcome to <b>AkMovieVerse</b>. Add me to a group, then send a file name or title to search the shared library.",
         "no_results": "No results for <b>{query}</b>.",
         "delivery_ready": "Your private delivery link is ready for 10 minutes.",
         "send_to_dm": "📥 Send to my DM (10 min)",
