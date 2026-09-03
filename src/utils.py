@@ -54,3 +54,12 @@ def message_file(message: Any) -> tuple[str | None, str | None]:
     if getattr(message, "photo", None):
         return message.photo[-1].file_id, "image"
     return None, None
+
+
+def message_file_size(message: Any) -> int:
+    """Return a supported media size in bytes, or zero when Telegram does not provide one."""
+    for attribute in ("document", "video", "audio", "animation"):
+        media = getattr(message, attribute, None)
+        if media:
+            return getattr(media, "file_size", 0) or 0
+    return 0

@@ -96,6 +96,9 @@ Send a title or filename in a group, or directly in DM when private search is en
 | `/autodelete SECONDS` | Delete bot search/delivery messages after a delay |
 | `/protection on|off` | Restrict forwarding/saving on new deliveries |
 | `/deliverysettings` | View delivery safety settings |
+| `/freelimit MB` | Set the maximum file size free users can receive (`0` disables it) |
+| `/freequality 1080p 2160p` | Restrict selected qualities to premium users |
+| `/freerules` | View active free-user access rules |
 | `/setcaption template` | Set custom media caption using `{file_name}` and `{original_caption}` |
 | `/caption` · `/clearcaption` | View or remove custom caption |
 | `/maintenance on | Notice` | Pause public search and delivery |
@@ -171,5 +174,6 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 - To override a poster for one file, send the image to the bot in private chat with `/setposter Movie Name` as its caption. Choose the matching title and portrait or landscape; no internal file ID is needed.
 - Enable inline mode in BotFather with `/setinline` to use `@YourBot title` anywhere.
 - Free users can save up to 3 search alerts; premium users can save up to 20.
+- Free-user file-size rules apply to files indexed after this feature is deployed, because older records may not include Telegram’s file-size value.
 - Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
 - Only index and distribute files that you own or are authorized to share.

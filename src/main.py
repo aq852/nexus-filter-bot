@@ -28,7 +28,7 @@ from pymongo import ReturnDocument
 from .config import Settings, get_settings
 from .database import Database
 from .i18n import LANGUAGES, translate
-from .utils import media_category, media_kind, message_file, normalize_query
+from .utils import media_category, media_kind, message_file, message_file_size, normalize_query
 
 router = Router()
 db: Database
@@ -169,6 +169,29 @@ async def delivery_settings() -> dict:
         "auto_delete_seconds": configured.get("auto_delete_seconds", settings.auto_delete_seconds),
         "protect_content": configured.get("protect_content", False),
     }
+
+
+async def free_access_rules() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "free_access"}) or {}
+    return {
+        "max_file_mb": configured.get("max_file_mb", 0),
+        "blocked_qualities": configured.get("blocked_qualities", []),
+    }
+
+
+async def free_access_restriction(user_id: int, file: dict) -> str | None:
+    if await premium_until(user_id):
+        return None
+    rules = await free_access_rules()
+    max_mb = int(rules["max_file_mb"] or 0)
+    size = int(file.get("file_size") or 0)
+    if max_mb and size > max_mb * 1024 * 1024:
+        return f"This file is larger than the free-user limit of {max_mb} MB. Premium access is required."
+    searchable = f"{file.get('name', '')} {file.get('caption', '')} {' '.join(file.get('tags', []))}".lower()
+    for quality in rules["blocked_qualities"]:
+        if quality.lower() in searchable:
+            return f"{quality} files are available to premium users only."
+    return None
 
 
 async def cleanup_settings() -> dict:
@@ -702,6 +725,10 @@ async def start(message: Message, command: CommandObject) -> None:
         if not file:
             await message.answer("That inline result is no longer available. Please search again.")
             return
+        restriction = await free_access_restriction(message.from_user.id, file)
+        if restriction:
+            await message.answer(f"<b>Premium required</b>\n\n{restriction}\n\nUse <code>/myplan</code> to check your plan.")
+            return
         if not await subscription_ok(message.bot, message.from_user.id):
             await message.answer(translate(language, "join_required"), reply_markup=await force_sub_keyboard())
             return
@@ -784,6 +811,48 @@ async def show_delivery_settings(message: Message) -> None:
         f"Forward protection: <b>{'on' if current['protect_content'] else 'off'}</b>\n\n"
         "Set: <code>/autodelete SECONDS</code>\nProtect: <code>/protection on</code>"
     )
+
+
+@router.message(Command("freelimit"))
+async def set_free_file_limit(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        megabytes = int(command.args or "")
+        if not 0 <= megabytes <= 2048:
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/freelimit MB</code>\nUse <code>0</code> to disable, up to 2048 MB.")
+        return
+    await db.db.bot_settings.update_one({"_id": "free_access"}, {"$set": {"max_file_mb": megabytes}}, upsert=True)
+    await message.answer("✅ Free-user file-size limit is disabled." if megabytes == 0 else f"✅ Free users can receive files up to <b>{megabytes} MB</b>.")
+
+
+@router.message(Command("freequality"))
+async def set_free_quality_limits(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw = (command.args or "").strip()
+    if raw.lower() == "off":
+        await db.db.bot_settings.update_one({"_id": "free_access"}, {"$set": {"blocked_qualities": []}}, upsert=True)
+        await message.answer("✅ Free-user quality restrictions are disabled.")
+        return
+    qualities = list(dict.fromkeys(item.lower() for item in raw.replace(",", " ").split() if item))
+    if not qualities:
+        await message.answer("Usage: <code>/freequality 1080p 2160p</code>\nUse <code>/freequality off</code> to disable.")
+        return
+    await db.db.bot_settings.update_one({"_id": "free_access"}, {"$set": {"blocked_qualities": qualities}}, upsert=True)
+    await message.answer(f"✅ Free users are restricted from: <code>{' '.join(qualities)}</code>")
+
+
+@router.message(Command("freerules"))
+async def show_free_access_rules(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    rules = await free_access_rules()
+    limit = f"{rules['max_file_mb']} MB" if rules["max_file_mb"] else "disabled"
+    qualities = ", ".join(rules["blocked_qualities"]) or "none"
+    await message.answer(f"<b>Free-user access rules</b>\n\nFile-size limit: <b>{limit}</b>\nBlocked qualities: <b>{qualities}</b>\n\nPremium users bypass both rules.")
 
 
 @router.message(Command("autoreaction"))
@@ -1850,6 +1919,7 @@ async def index_channel_file(message: Message) -> None:
         "source_message_id": message.message_id,
         "telegram_file_id": file_id,
         "name": name or "file",
+        "file_size": message_file_size(message),
         "kind": media_kind(message),
         "category": media_category(message),
         "caption": caption,
@@ -1947,6 +2017,7 @@ async def owner_upload_inbox(message: Message) -> None:
         "source_message_id": copied.message_id,
         "telegram_file_id": file_id,
         "name": name or "file",
+        "file_size": message_file_size(message),
         "kind": media_kind(message),
         "category": media_category(message),
         "caption": caption,
@@ -2357,6 +2428,10 @@ async def prepare_download(callback: CallbackQuery) -> None:
     if not file:
         await callback.answer("This file is unavailable.", show_alert=True)
         return
+    restriction = await free_access_restriction(callback.from_user.id, file)
+    if restriction:
+        await callback.answer(restriction, show_alert=True)
+        return
     if not await subscription_ok(callback.bot, callback.from_user.id):
         await callback.message.answer(translate(await user_language(callback.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
         await callback.answer()
@@ -2390,6 +2465,13 @@ async def send_file(callback: CallbackQuery) -> None:
         await callback.answer()
         return
     file = await db.db.files.find_one({"_id": ObjectId(token["file_id"])})
+    if not file:
+        await callback.answer("This file is no longer available.", show_alert=True)
+        return
+    restriction = await free_access_restriction(callback.from_user.id, file)
+    if restriction:
+        await callback.answer(restriction, show_alert=True)
+        return
     try:
         delivery_caption = await custom_delivery_caption(file)
         delivered = await callback.bot.copy_message(
