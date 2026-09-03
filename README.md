@@ -104,6 +104,10 @@ The owner can enable a small reaction on new non-command text messages in every 
 
 The owner can temporarily pause public search, inline results, verification links, and private file delivery with `/maintenance on | Optional notice`. Owner commands continue to work, so you can update source channels and settings while the pause is active. Run `/maintenance off` to restore normal use, or `/maintenance` to inspect the current notice and state.
 
+## Private-chat search
+
+Users can search the shared library by sending a title or filename directly to AkMovieVerse in a private chat. This is enabled by default. The owner can use `/pmsearch off` to make searches group-only, `/pmsearch on` to restore it, or `/pmsearch` to view the current state. Private results use the same protected delivery, subscription, verification, and premium rules as group results.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

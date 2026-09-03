@@ -139,6 +139,11 @@ async def maintenance_active(user_id: int) -> bool:
     return not is_owner(user_id) and (await maintenance_settings())["enabled"]
 
 
+async def pm_search_enabled() -> bool:
+    configured = await db.db.bot_settings.find_one({"_id": "pm_search"}) or {}
+    return configured.get("enabled", True)
+
+
 async def react_to_group_message(message: Message) -> None:
     config = await auto_reaction_settings()
     if not config["enabled"]:
@@ -521,6 +526,21 @@ async def manage_maintenance(message: Message, command: CommandObject) -> None:
         update["message"] = notice.strip()[:500]
     await db.db.bot_settings.update_one({"_id": "maintenance"}, {"$set": update}, upsert=True)
     await message.answer(f"✅ Maintenance mode is now <b>{choice}</b>.")
+
+
+@router.message(Command("pmsearch"))
+async def toggle_pm_search(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if not choice:
+        await message.answer(f"Private-chat search is <b>{'on' if await pm_search_enabled() else 'off'}</b>.\nUse <code>/pmsearch on</code> or <code>/pmsearch off</code>.")
+        return
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/pmsearch on</code> or <code>/pmsearch off</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "pm_search"}, {"$set": {"enabled": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Private-chat search is now <b>{choice}</b>.")
 
 
 def parse_premium_duration(value: str) -> timedelta:
@@ -1254,6 +1274,22 @@ async def welcome_new_members(message: Message) -> None:
         if not user.is_bot:
             text = template.replace("{name}", user.full_name).replace("{group}", message.chat.title or "this group")
             await message.answer(text)
+
+
+@router.message(F.chat.type == ChatType.PRIVATE, F.text, ~F.text.startswith("/"))
+async def private_search(message: Message) -> None:
+    if await maintenance_active(message.from_user.id):
+        await message.answer((await maintenance_settings())["message"])
+        return
+    if not await pm_search_enabled():
+        await message.answer("Private search is currently disabled. Please use AkMovieVerse in a group.")
+        return
+    if await db.db.users.find_one({"user_id": message.from_user.id, "banned": True}):
+        return
+    if len(normalize_query(message.text)) < 2:
+        await message.answer("Send at least two characters to search the library.")
+        return
+    await render_results(message, message.from_user.id, message.text, 0)
 
 
 @router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}), F.text, ~F.text.startswith("/"))
