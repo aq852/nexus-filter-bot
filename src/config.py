@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Public HTTPS address of the web service used for verification callbacks.
     # Example: https://your-service.koyeb.app (no trailing slash).
     verify_base_url: str | None = None
+    tmdb_api_key: str | None = None
+    tmdb_read_access_token: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

@@ -6,6 +6,7 @@ from html import escape
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
+import httpx
 from aiogram import Bot, Dispatcher, F, Router
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ChatMemberStatus, ChatType, ParseMode
@@ -185,6 +186,35 @@ async def custom_delivery_caption(file: dict) -> str | None:
         file_name=escape(file.get("name", "file")),
         original_caption=escape(file.get("caption", "")),
     )[:1024]
+
+
+async def tmdb_lookup(query: str) -> dict | None:
+    if not settings.tmdb_api_key and not settings.tmdb_read_access_token:
+        return None
+    headers = {"Authorization": f"Bearer {settings.tmdb_read_access_token}"} if settings.tmdb_read_access_token else {}
+    params = {"query": query, "include_adult": "false", "language": "en-US"}
+    if settings.tmdb_api_key:
+        params["api_key"] = settings.tmdb_api_key
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            response = await client.get("https://api.themoviedb.org/3/search/multi", params=params, headers=headers)
+            response.raise_for_status()
+        results = response.json().get("results", [])
+        return next((item for item in results if item.get("media_type") in {"movie", "tv"}), None)
+    except httpx.HTTPError as error:
+        logging.warning("TMDB lookup failed: %s", error)
+        return None
+
+
+def tmdb_caption(item: dict) -> str:
+    title = escape(item.get("title") or item.get("name") or "Untitled")
+    date = item.get("release_date") or item.get("first_air_date") or "Unknown year"
+    year = date[:4] if date else "Unknown year"
+    media_type = "Movie" if item.get("media_type") == "movie" else "Series"
+    rating = item.get("vote_average")
+    rating_text = f"\nRating: <b>{rating:.1f}/10</b>" if isinstance(rating, (int, float)) and rating else ""
+    overview = escape(item.get("overview") or "No overview is available.")[:700]
+    return f"<b>{title}</b> ({year})\nType: <b>{media_type}</b>{rating_text}\n\n{overview}\n\n<i>Metadata provided by TMDB.</i>"
 
 
 async def add_ad_to_results(keyboard: InlineKeyboardMarkup | None, user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
@@ -703,6 +733,37 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     minutes = int(reward.total_seconds() // 60)
     await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
+
+
+@router.message(Command("tmdb"))
+async def tmdb_metadata(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/tmdb Movie or series title</code>")
+        return
+    if not settings.tmdb_api_key and not settings.tmdb_read_access_token:
+        await message.answer("TMDB is not configured. Add <code>TMDB_READ_ACCESS_TOKEN</code> (recommended) or <code>TMDB_API_KEY</code> in Koyeb and restart the bot.")
+        return
+    item = await tmdb_lookup(query)
+    if not item:
+        await message.answer("No TMDB movie or series result was found.")
+        return
+    media_type = item["media_type"]
+    details_url = f"https://www.themoviedb.org/{media_type}/{item['id']}"
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="View on TMDB", url=details_url)
+    ]])
+    poster = item.get("poster_path")
+    if poster:
+        await message.answer_photo(
+            photo=f"https://image.tmdb.org/t/p/w500{poster}",
+            caption=tmdb_caption(item),
+            reply_markup=keyboard,
+        )
+    else:
+        await message.answer(tmdb_caption(item), reply_markup=keyboard)
 
 
 @router.message(Command("setcaption"))

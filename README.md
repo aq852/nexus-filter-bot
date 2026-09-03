@@ -124,6 +124,10 @@ The owner can add a small sponsor button beneath search results using `/setad Sp
 
 Set a reusable caption for newly delivered media with `/setcaption 🎬 {file_name}\n\n{original_caption}`. The supported placeholders are `{file_name}` and `{original_caption}`. Check it with `/caption` or remove it using `/clearcaption`. When no custom caption is set, AkMovieVerse preserves the source post’s original caption.
 
+## TMDB rich metadata
+
+Set either `TMDB_READ_ACCESS_TOKEN` (recommended) or `TMDB_API_KEY` as a Koyeb environment variable, then restart the bot. The owner can run `/tmdb Movie or series title` to fetch a rich TMDB result with a poster, year, rating, overview, and a source link. TMDB's API supports both API-key and Bearer-token application authentication; create credentials from your TMDB account’s API settings. [TMDB authentication guide](https://developer.themoviedb.org/docs/authentication-application)
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
