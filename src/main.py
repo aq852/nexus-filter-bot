@@ -217,6 +217,33 @@ def tmdb_caption(item: dict) -> str:
     return f"<b>{title}</b> ({year})\nType: <b>{media_type}</b>{rating_text}\n\n{overview}\n\n<i>Metadata provided by TMDB.</i>"
 
 
+def saved_alert_matches(alert_query: str, searchable_text: str) -> bool:
+    query = normalize_query(alert_query).lower()
+    haystack = normalize_query(searchable_text).lower()
+    words = [word for word in query.split() if len(word) > 1]
+    return bool(query and (query in haystack or (words and all(word in haystack for word in words))))
+
+
+async def notify_saved_alerts(bot: Bot, record: dict, file_id: str) -> None:
+    """Notify subscribers when a newly indexed file matches their saved search."""
+    async for alert in db.db.search_alerts.find({}):
+        if not saved_alert_matches(alert["query"], record["search_text"]):
+            continue
+        token = await db.make_download_token(file_id, alert["user_id"])
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+        ]])
+        try:
+            await bot.send_message(
+                alert["user_id"],
+                f"🔔 <b>Saved search match</b>\n\n<b>{escape(record['name'])}</b> matches your alert: <i>{escape(alert['query'])}</i>",
+                reply_markup=keyboard,
+            )
+            await db.db.search_alerts.update_one({"_id": alert["_id"]}, {"$set": {"last_notified_at": datetime.now(timezone.utc), "last_file_id": file_id}})
+        except Exception:
+            continue
+
+
 async def add_ad_to_results(keyboard: InlineKeyboardMarkup | None, user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
     if await premium_until(user_id):
         return "", keyboard
@@ -950,6 +977,51 @@ async def show_ids(message: Message) -> None:
     )
 
 
+@router.message(Command("alert"))
+async def save_search_alert(message: Message, command: CommandObject) -> None:
+    query = normalize_query(command.args or "")
+    if len(query) < 2:
+        await message.answer("Usage: <code>/alert Movie or file title</code>")
+        return
+    limit = 20 if await premium_until(message.from_user.id) else 3
+    existing = await db.db.search_alerts.find_one({"user_id": message.from_user.id, "query": query})
+    if existing:
+        await message.answer("You already have that saved search alert.")
+        return
+    count = await db.db.search_alerts.count_documents({"user_id": message.from_user.id})
+    if count >= limit:
+        plan = "Premium users can save up to 20 alerts." if limit == 3 else "You have reached the 20-alert premium limit."
+        await message.answer(f"You can save up to <b>{limit}</b> alerts. {plan}")
+        return
+    result = await db.db.search_alerts.insert_one({
+        "user_id": message.from_user.id,
+        "query": query,
+        "created_at": datetime.now(timezone.utc),
+    })
+    await message.answer(f"✅ Alert saved for <b>{escape(query)}</b>. I will notify you when a matching new file is indexed.\nID: <code>{result.inserted_id}</code>")
+
+
+@router.message(Command("alerts"))
+async def list_search_alerts(message: Message) -> None:
+    alerts = await db.db.search_alerts.find({"user_id": message.from_user.id}).sort("created_at", -1).to_list(length=25)
+    if not alerts:
+        await message.answer("You have no saved search alerts. Create one with <code>/alert title</code>.")
+        return
+    lines = [f"• <code>{alert['_id']}</code> — {escape(alert['query'])}" for alert in alerts]
+    await message.answer("<b>Your saved search alerts</b>\n\n" + "\n".join(lines) + "\n\nRemove one: <code>/stopalert ALERT_ID</code>")
+
+
+@router.message(Command("stopalert"))
+async def stop_search_alert(message: Message, command: CommandObject) -> None:
+    try:
+        alert_id = ObjectId(command.args or "")
+    except Exception:
+        await message.answer("Usage: <code>/stopalert ALERT_ID</code>")
+        return
+    result = await db.db.search_alerts.delete_one({"_id": alert_id, "user_id": message.from_user.id})
+    await message.answer("✅ Saved search alert removed." if result.deleted_count else "Alert not found.")
+
+
 @router.message(Command("userinfo"))
 async def user_info(message: Message, command: CommandObject) -> None:
     if not is_owner(message.from_user.id):
@@ -1497,6 +1569,7 @@ async def index_channel_file(message: Message) -> None:
     stored_file_id = str(stored_file["_id"])
     if index_result.upserted_id:
         await announce_new_file(message.bot, record, stored_file_id)
+        await notify_saved_alerts(message.bot, record, stored_file_id)
     matching_requests = await db.matching_requests(record["search_text"]) if await request_system_enabled() else []
     for request in matching_requests:
         requester_ids = request.get("requesters") or ([request["user_id"]] if request.get("user_id") else [])
@@ -1561,6 +1634,7 @@ async def owner_upload_inbox(message: Message) -> None:
     )
     if index_result.upserted_id and stored_file:
         await announce_new_file(message.bot, record, str(stored_file["_id"]))
+        await notify_saved_alerts(message.bot, record, str(stored_file["_id"]))
     await message.answer(
         f"✅ Added to <b>{storage.title}</b> and indexed.\n\n"
         f"Title: <b>{record['name']}</b>\n"

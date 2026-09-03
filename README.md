@@ -42,6 +42,8 @@ Anyone can add AkMovieVerse to a group and search one shared library. Only the o
 | `/language` | Choose English, Hindi, Bengali, Tamil, Telugu, Malayalam, Kannada, Marathi, or Urdu |
 | `/verify` | Get a shortlink-verification link when required |
 | `/myplan` | Check premium status and expiry |
+| `/alert title` | Save a search and receive matching-file alerts |
+| `/alerts` · `/stopalert ID` | List or remove saved searches |
 | `/refer` | Get your referral link when Refer & Earn is enabled |
 | `/redeem CODE` | Redeem a premium code |
 
@@ -159,5 +161,6 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 
 - Configure TMDB credentials in Koyeb before using `/tmdb`. [TMDB authentication guide](https://developer.themoviedb.org/docs/authentication-application)
 - Enable inline mode in BotFather with `/setinline` to use `@YourBot title` anywhere.
+- Free users can save up to 3 search alerts; premium users can save up to 20.
 - Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
 - Only index and distribute files that you own or are authorized to share.
