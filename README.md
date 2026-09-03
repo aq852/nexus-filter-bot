@@ -120,6 +120,10 @@ Create limited-use premium codes with `/createcode MOVIE30 | 30d | 100`, where t
 
 The owner can add a small sponsor button beneath search results using `/setad Sponsor text | https://example.com | Open sponsor`, then enable it with `/ads on`. Use `/ads off` to pause it, `/adstatus` to review the saved content, or `/clearad` to remove it. Ads are only shown to free users; premium users stay ad-free.
 
+## Custom delivery captions
+
+Set a reusable caption for newly delivered media with `/setcaption 🎬 {file_name}\n\n{original_caption}`. The supported placeholders are `{file_name}` and `{original_caption}`. Check it with `/caption` or remove it using `/clearcaption`. When no custom caption is set, AkMovieVerse preserves the source post’s original caption.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

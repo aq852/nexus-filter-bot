@@ -172,6 +172,21 @@ async def ad_settings() -> dict:
     }
 
 
+async def caption_template() -> str | None:
+    configured = await db.db.bot_settings.find_one({"_id": "caption"}) or {}
+    return configured.get("template") or None
+
+
+async def custom_delivery_caption(file: dict) -> str | None:
+    template = await caption_template()
+    if not template:
+        return None
+    return template.format(
+        file_name=escape(file.get("name", "file")),
+        original_caption=escape(file.get("caption", "")),
+    )[:1024]
+
+
 async def add_ad_to_results(keyboard: InlineKeyboardMarkup | None, user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
     if await premium_until(user_id):
         return "", keyboard
@@ -688,6 +703,42 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     minutes = int(reward.total_seconds() // 60)
     await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
+
+
+@router.message(Command("setcaption"))
+async def set_custom_caption(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    template = (command.args or "").strip()
+    if not template:
+        await message.answer("Usage: <code>/setcaption 🎬 {file_name}\n\n{original_caption}</code>\nAvailable placeholders: <code>{file_name}</code>, <code>{original_caption}</code>.")
+        return
+    if len(template) > 1024:
+        await message.answer("The caption template must be 1024 characters or fewer.")
+        return
+    try:
+        template.format(file_name="Example file", original_caption="Original caption")
+    except (KeyError, ValueError):
+        await message.answer("Use only <code>{file_name}</code> and <code>{original_caption}</code> placeholders.")
+        return
+    await db.db.bot_settings.update_one({"_id": "caption"}, {"$set": {"template": template}}, upsert=True)
+    await message.answer("✅ Custom delivery caption saved. It will be used for newly delivered media files.")
+
+
+@router.message(Command("caption"))
+async def show_custom_caption(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    template = await caption_template()
+    await message.answer(f"<b>Custom caption</b>\n\n{escape(template) if template else 'Not configured.'}\n\nSet: <code>/setcaption Your template</code>\nClear: <code>/clearcaption</code>")
+
+
+@router.message(Command("clearcaption"))
+async def clear_custom_caption(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await db.db.bot_settings.update_one({"_id": "caption"}, {"$unset": {"template": ""}}, upsert=True)
+    await message.answer("✅ Custom delivery caption cleared.")
 
 
 @router.message(Command("setad"))
@@ -1801,11 +1852,14 @@ async def send_file(callback: CallbackQuery) -> None:
         return
     file = await db.db.files.find_one({"_id": ObjectId(token["file_id"])})
     try:
+        delivery_caption = await custom_delivery_caption(file)
         delivered = await callback.bot.copy_message(
             callback.from_user.id,
             file["source_chat_id"],
             file["source_message_id"],
             protect_content=(await delivery_settings())["protect_content"],
+            caption=delivery_caption,
+            parse_mode=ParseMode.HTML if delivery_caption else None,
         )
         asyncio.create_task(delete_message_later(callback.bot, callback.from_user.id, delivered.message_id))
     except Exception:
