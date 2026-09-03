@@ -57,6 +57,7 @@ Send a title or filename in a group, or directly in DM when private search is en
 | Command | Use |
 | --- | --- |
 | `/panel` or `/stats` | Open owner dashboard and statistics |
+| `/analytics` | View global search analytics (owner) |
 | `/addsource CHAT_ID` | Add a source channel |
 | `/removesource CHAT_ID` | Remove a source channel |
 | `/recentfiles` | Show recent indexed files and IDs |
@@ -126,6 +127,7 @@ Send a title or filename in a group, or directly in DM when private search is en
 | Command | Use |
 | --- | --- |
 | `/settings` | Open group settings panel |
+| `/analytics` | View search analytics for this group only |
 | `/setwelcome text` · `/clearwelcome` | Manage welcome message |
 | `/setrules text` · `/rules` | Manage group rules |
 | `/filter keyword | reply` · `/stopfilter keyword` | Add/remove keyword replies |

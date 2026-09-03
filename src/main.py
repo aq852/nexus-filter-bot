@@ -80,6 +80,46 @@ async def owner_stats_text() -> str:
     return f"<b>AkMovieVerse control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nPremium users: <b>{premium}</b>\nVerified users: <b>{verified}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
 
 
+async def analytics_text(chat_id: int | None = None) -> str:
+    now = datetime.now(timezone.utc)
+    day_start = now - timedelta(days=1)
+    week_start = now - timedelta(days=7)
+    scope = {"chat_id": chat_id} if chat_id is not None else {}
+
+    def selector(start: datetime) -> dict:
+        return {**scope, "created_at": {"$gte": start}}
+
+    day_searches = await db.db.search_events.count_documents(selector(day_start))
+    week_searches = await db.db.search_events.count_documents(selector(week_start))
+    day_users = len(await db.db.search_events.distinct("user_id", selector(day_start)))
+    week_users = len(await db.db.search_events.distinct("user_id", selector(week_start)))
+    top_pipeline = [
+        {"$match": selector(week_start)},
+        {"$group": {"_id": "$query", "count": {"$sum": 1}}},
+        {"$sort": {"count": -1, "_id": 1}},
+        {"$limit": 5},
+    ]
+    top = await db.db.search_events.aggregate(top_pipeline).to_list(length=5)
+    top_text = "\n".join(f"• {escape(item['_id'])} — <b>{item['count']}</b>" for item in top) or "No searches recorded yet."
+    heading = "This group" if chat_id is not None else "AkMovieVerse global"
+    text = (
+        f"<b>{heading} analytics</b>\n\n"
+        f"Last 24 hours: <b>{day_searches}</b> searches · <b>{day_users}</b> users\n"
+        f"Last 7 days: <b>{week_searches}</b> searches · <b>{week_users}</b> users\n\n"
+        f"<b>Top searches (7 days)</b>\n{top_text}"
+    )
+    if chat_id is None:
+        groups = await db.db.search_events.aggregate([
+            {"$match": {"created_at": {"$gte": week_start}, "chat_id": {"$lt": 0}}},
+            {"$group": {"_id": "$chat_id", "count": {"$sum": 1}}},
+            {"$sort": {"count": -1}},
+            {"$limit": 5},
+        ]).to_list(length=5)
+        group_text = "\n".join(f"• <code>{item['_id']}</code> — <b>{item['count']}</b>" for item in groups) or "No group searches recorded yet."
+        text += f"\n\n<b>Top groups (7 days)</b>\n{group_text}"
+    return text
+
+
 async def force_sub_channels() -> list[dict]:
     channels = await db.db.force_sub_channels.find({}).sort("added_at", 1).to_list(length=20)
     if not channels and settings.force_sub_channel_id:
@@ -565,7 +605,7 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
 async def render_results(message: Message, user_id: int, query: str, page: int, session_id: str | None = None, category: str | None = None) -> None:
     clean_query = normalize_query(query)
     language = await user_language(user_id)
-    await db.record_search(clean_query)
+    await db.record_search(clean_query, user_id, message.chat.id)
     page_size = await results_per_page_for(user_id)
     files, total = await db.search(clean_query, page, page_size, category)
     if not session_id:
@@ -2207,6 +2247,17 @@ async def stats(message: Message) -> None:
     if not is_owner(message.from_user.id):
         return
     await message.answer(await owner_stats_text(), reply_markup=panel_keyboard())
+
+
+@router.message(Command("analytics"))
+async def analytics(message: Message) -> None:
+    if is_owner(message.from_user.id):
+        await message.answer(await analytics_text())
+        return
+    if message.chat.type not in {ChatType.GROUP, ChatType.SUPERGROUP} or not await is_group_admin(message):
+        await message.answer("Only the bot owner or an administrator of this group can view analytics.")
+        return
+    await message.answer(await analytics_text(message.chat.id))
 
 
 async def main() -> None:

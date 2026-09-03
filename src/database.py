@@ -25,6 +25,8 @@ class Database:
         await self.db.search_sessions.create_index("created_at", expireAfterSeconds=3600)
         await self.db.download_tokens.create_index("expires_at", expireAfterSeconds=0)
         await self.db.searches.create_index("query", unique=True)
+        await self.db.search_events.create_index("created_at", expireAfterSeconds=2_592_000)
+        await self.db.search_events.create_index([("chat_id", 1), ("created_at", -1)])
         await self.db.keyword_filters.create_index([("chat_id", 1), ("keyword", 1)], unique=True)
         await self.db.blacklist.create_index([("chat_id", 1), ("word", 1)], unique=True)
         await self.db.scheduled_broadcasts.create_index([("status", 1), ("due_at", 1)])
@@ -122,12 +124,18 @@ class Database:
         except Exception:
             return None
 
-    async def record_search(self, query: str) -> None:
+    async def record_search(self, query: str, user_id: int, chat_id: int) -> None:
         await self.db.searches.update_one(
             {"query": query},
             {"$inc": {"count": 1}, "$set": {"last_searched": datetime.now(timezone.utc)}},
             upsert=True,
         )
+        await self.db.search_events.insert_one({
+            "query": query,
+            "user_id": user_id,
+            "chat_id": chat_id,
+            "created_at": datetime.now(timezone.utc),
+        })
 
     async def top_searches(self, limit: int = 5) -> list[dict]:
         return await self.db.searches.find({}).sort("count", -1).limit(limit).to_list(length=limit)
