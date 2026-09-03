@@ -7,7 +7,7 @@ A centrally managed Telegram search bot that anyone can add to a group. It searc
 - Search a unified library from any group where the bot is present
 - Index documents, media, apps, archives, and other authorized files from owner-approved source channels
 - Smart search with typo suggestions, file-type filters, paginated results, and private user-bound delivery buttons that expire after ten minutes
-- Optional forced-subscription check, missing-file requests, top-search analytics, broadcast, and an owner-only control panel
+- Optional multi-channel force-subscription check, configurable missing-file requests, top-search analytics, broadcast, and an owner-only control panel
 - One owner-controlled configuration; group administrators do not manage separate libraries
 - Group-local tools for administrators: welcome messages, rules, keyword replies, blacklist, anti-spam, and search on/off
 
@@ -35,6 +35,10 @@ docs/           setup and operating notes
 5. Add the bot to any public group. Members can search by sending a title or filename.
 
 Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broadcast`, `/ban`, `/unban`, and `/closerequest`.
+
+## Force subscription
+
+The owner can require users to join multiple channels before private delivery. Add a channel with `/addfsub CHAT_ID | JOIN_LINK`; the link is optional for a public channel. Remove a channel with `/removefsub CHAT_ID`, or list them with `/fsub`. The bot checks membership in every configured channel and shows join buttons when links are available.
 
 ## File management
 
@@ -73,5 +77,7 @@ Group administrators can open `/settings` to toggle group search and anti-spam u
 ## Request fulfilment
 
 Missing-file requests are grouped by search term and sent to the owner. When you add a likely matching authorized file to a source channel, the bot automatically marks the request fulfilled and privately notifies every requester with a ten-minute delivery button.
+
+The owner can turn this system on or off with `/requests on` or `/requests off`, or from the owner control panel. When it is off, the bot does not show request buttons or match new files to open requests.
 
 Only index and distribute content you own or are authorized to share.

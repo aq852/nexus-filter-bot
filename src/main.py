@@ -51,6 +51,8 @@ def panel_keyboard() -> InlineKeyboardMarkup:
         [InlineKeyboardButton(text="📊 Live stats", callback_data="panel:stats"),
          InlineKeyboardButton(text="📁 Source channels", callback_data="panel:sources")],
         [InlineKeyboardButton(text="📩 Open requests", callback_data="panel:requests"),
+         InlineKeyboardButton(text="🎚 Request system", callback_data="panel:requesttoggle")],
+        [InlineKeyboardButton(text="🔐 Force subscription", callback_data="panel:fsub"),
          InlineKeyboardButton(text="🔎 Top searches", callback_data="panel:searches")],
         [InlineKeyboardButton(text="🗂 Recent files", callback_data="panel:files"),
          InlineKeyboardButton(text="📣 Broadcast help", callback_data="panel:broadcast")],
@@ -65,17 +67,42 @@ async def owner_stats_text() -> str:
     users = await db.db.users.count_documents({})
     sources = await db.db.source_channels.count_documents({})
     requests = await db.db.requests.count_documents({"status": "open"})
-    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nSource channels: <b>{sources}</b>\nOpen requests: <b>{requests}</b>"
+    request_setting = await db.db.bot_settings.find_one({"_id": "global"}) or {}
+    request_state = "on" if request_setting.get("request_system_enabled", True) else "off"
+    fsub_count = await db.db.force_sub_channels.count_documents({})
+    return f"<b>Nexus control panel</b>\n\nFiles: <b>{files}</b>\nUsers: <b>{users}</b>\nSource channels: <b>{sources}</b>\nForce-sub channels: <b>{fsub_count}</b>\nRequest system: <b>{request_state}</b>\nOpen requests: <b>{requests}</b>"
+
+
+async def force_sub_channels() -> list[dict]:
+    channels = await db.db.force_sub_channels.find({}).sort("added_at", 1).to_list(length=20)
+    if not channels and settings.force_sub_channel_id:
+        channels = [{"chat_id": settings.force_sub_channel_id, "title": "Updates channel", "join_url": None}]
+    return channels
 
 
 async def subscription_ok(bot: Bot, user_id: int) -> bool:
-    if not settings.force_sub_channel_id:
-        return True
-    try:
-        member = await bot.get_chat_member(settings.force_sub_channel_id, user_id)
-        return member.status not in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}
-    except Exception:
-        return False
+    for channel in await force_sub_channels():
+        try:
+            member = await bot.get_chat_member(channel["chat_id"], user_id)
+            if member.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
+                return False
+        except Exception:
+            return False
+    return True
+
+
+async def force_sub_keyboard() -> InlineKeyboardMarkup | None:
+    rows = []
+    for channel in await force_sub_channels():
+        url = channel.get("join_url")
+        if url:
+            rows.append([InlineKeyboardButton(text=f"Join {channel.get('title') or 'channel'}", url=url)])
+    return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
+
+
+async def request_system_enabled() -> bool:
+    setting = await db.db.bot_settings.find_one({"_id": "global"})
+    return setting.get("request_system_enabled", True) if setting else True
 
 
 async def is_group_admin(message: Message) -> bool:
@@ -186,9 +213,11 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
     if not session_id:
         session_id = await db.save_search_session(user_id, message.chat.id, clean_query)
     if not files:
-        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📩 Request this", callback_data=f"request:{session_id}")
-        ]])
+        keyboard = None
+        if await request_system_enabled():
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+                InlineKeyboardButton(text="📩 Request this", callback_data=f"request:{session_id}")
+            ]])
         suggestions = await db.suggestions(clean_query)
         hint = "\n<b>Did you mean:</b> " + " • ".join(suggestions) if suggestions else ""
         sent = await message.answer(f"{translate(language, 'no_results', query=clean_query)}{hint}", reply_markup=keyboard)
@@ -222,7 +251,7 @@ async def start(message: Message, command: CommandObject) -> None:
             await message.answer("That inline result is no longer available. Please search again.")
             return
         if not await subscription_ok(message.bot, message.from_user.id):
-            await message.answer(translate(language, "join_required"))
+            await message.answer(translate(language, "join_required"), reply_markup=await force_sub_keyboard())
             return
         token = await db.make_download_token(str(file["_id"]), message.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -308,6 +337,67 @@ async def remove_source(message: Message, command: CommandObject) -> None:
         return
     result = await db.db.source_channels.delete_one({"chat_id": chat_id})
     await message.answer("✅ Source channel removed." if result.deleted_count else "That channel is not a source.")
+
+
+@router.message(Command("addfsub"))
+async def add_force_sub_channel(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_chat_id, *raw_link = (command.args or "").split("|", 1)
+        chat_id = int(raw_chat_id.strip())
+    except ValueError:
+        await message.answer("Usage: <code>/addfsub CHAT_ID | JOIN_LINK</code>\nThe join link is optional for public channels.")
+        return
+    try:
+        chat = await message.bot.get_chat(chat_id)
+    except Exception:
+        await message.answer("I cannot access that channel. Add me as an admin first, then try again.")
+        return
+    join_url = raw_link[0].strip() if raw_link else (f"https://t.me/{chat.username}" if chat.username else None)
+    await db.db.force_sub_channels.update_one(
+        {"chat_id": chat.id},
+        {"$set": {"chat_id": chat.id, "title": chat.title, "join_url": join_url, "added_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    await message.answer(f"✅ Added force-subscription channel: <b>{chat.title}</b>")
+
+
+@router.message(Command("removefsub"))
+async def remove_force_sub_channel(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        chat_id = int(command.args or "")
+    except ValueError:
+        await message.answer("Usage: <code>/removefsub CHAT_ID</code>")
+        return
+    result = await db.db.force_sub_channels.delete_one({"chat_id": chat_id})
+    await message.answer("✅ Force-subscription channel removed." if result.deleted_count else "That channel is not configured.")
+
+
+@router.message(Command("fsub"))
+async def list_force_sub_channels(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    channels = await force_sub_channels()
+    details = "\n".join(f"• <code>{item['chat_id']}</code> — {item.get('title') or 'Untitled'}" for item in channels)
+    await message.answer(f"<b>Force-subscription channels</b>\n{details or 'None configured.'}")
+
+
+@router.message(Command("requests"))
+async def toggle_request_system(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").lower()
+    if choice not in {"on", "off"}:
+        state = "on" if await request_system_enabled() else "off"
+        await message.answer(f"Request system is <b>{state}</b>.\nUsage: <code>/requests on</code> or <code>/requests off</code>")
+        return
+    await db.db.bot_settings.update_one(
+        {"_id": "global"}, {"$set": {"request_system_enabled": choice == "on"}}, upsert=True
+    )
+    await message.answer(f"✅ Request system is now <b>{choice}</b>.")
 
 
 @router.message(Command("recentfiles"))
@@ -405,6 +495,14 @@ async def owner_panel_action(callback: CallbackQuery) -> None:
         requests = await db.db.requests.find({"status": "open"}).sort("created_at", -1).to_list(length=15)
         details = "\n".join(f"• <code>{item['_id']}</code> — {item['query']} ({len(item.get('requesters', [])) or 1} user(s))" for item in requests)
         text = f"<b>Open requests ({len(requests)})</b>\n{details or 'No pending requests.'}\n\nClose one: <code>/closerequest REQUEST_ID</code>"
+    elif action == "requesttoggle":
+        enabled = await request_system_enabled()
+        await db.db.bot_settings.update_one({"_id": "global"}, {"$set": {"request_system_enabled": not enabled}}, upsert=True)
+        text = f"<b>Request system</b>\n\nIt is now <b>{'on' if not enabled else 'off'}</b>.\n\nCommand: <code>/requests on</code> or <code>/requests off</code>"
+    elif action == "fsub":
+        channels = await force_sub_channels()
+        details = "\n".join(f"• <code>{item['chat_id']}</code> — {item.get('title') or 'Untitled'}" for item in channels)
+        text = f"<b>Force-subscription channels ({len(channels)})</b>\n{details or 'None configured.'}\n\nAdd: <code>/addfsub CHAT_ID | JOIN_LINK</code>\nRemove: <code>/removefsub CHAT_ID</code>"
     elif action == "searches":
         searches = await db.top_searches()
         details = "\n".join(f"• {item['query']} — <b>{item['count']}</b>" for item in searches)
@@ -456,7 +554,7 @@ async def index_channel_file(message: Message) -> None:
     stored_file_id = str(stored_file["_id"])
     if index_result.upserted_id:
         await announce_new_file(message.bot, record, stored_file_id)
-    matching_requests = await db.matching_requests(record["search_text"])
+    matching_requests = await db.matching_requests(record["search_text"]) if await request_system_enabled() else []
     for request in matching_requests:
         requester_ids = request.get("requesters") or ([request["user_id"]] if request.get("user_id") else [])
         delivered = 0
@@ -714,7 +812,7 @@ async def group_search(message: Message) -> None:
     if await db.db.users.find_one({"user_id": message.from_user.id, "banned": True}):
         return
     if not await subscription_ok(message.bot, message.from_user.id):
-        await message.reply(translate(await user_language(message.from_user.id), "join_required"))
+        await message.reply(translate(await user_language(message.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
         return
     if len(normalized) < 2:
         return
@@ -879,8 +977,12 @@ async def filter_results(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("file:"))
 async def prepare_download(callback: CallbackQuery) -> None:
     file = await db.db.files.find_one({"_id": ObjectId(callback.data.split(":", 1)[1])})
-    if not file or not await subscription_ok(callback.bot, callback.from_user.id):
-        await callback.answer("This file is unavailable or your subscription check failed.", show_alert=True)
+    if not file:
+        await callback.answer("This file is unavailable.", show_alert=True)
+        return
+    if not await subscription_ok(callback.bot, callback.from_user.id):
+        await callback.message.answer(translate(await user_language(callback.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
+        await callback.answer()
         return
     token = await db.make_download_token(str(file["_id"]), callback.from_user.id)
     language = await user_language(callback.from_user.id)
@@ -894,8 +996,12 @@ async def prepare_download(callback: CallbackQuery) -> None:
 @router.callback_query(F.data.startswith("send:"))
 async def send_file(callback: CallbackQuery) -> None:
     token = await db.get_download_token(callback.data.split(":", 1)[1], callback.from_user.id)
-    if not token or not await subscription_ok(callback.bot, callback.from_user.id):
+    if not token:
         await callback.answer("This delivery link expired or is unavailable.", show_alert=True)
+        return
+    if not await subscription_ok(callback.bot, callback.from_user.id):
+        await callback.message.answer(translate(await user_language(callback.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
+        await callback.answer()
         return
     file = await db.db.files.find_one({"_id": ObjectId(token["file_id"])})
     try:
@@ -908,6 +1014,9 @@ async def send_file(callback: CallbackQuery) -> None:
 
 @router.callback_query(F.data.startswith("request:"))
 async def request_missing(callback: CallbackQuery) -> None:
+    if not await request_system_enabled():
+        await callback.answer("Requests are currently disabled by the owner.", show_alert=True)
+        return
     session = await db.get_session(callback.data.split(":", 1)[1])
     if not session or session["user_id"] != callback.from_user.id:
         await callback.answer("This request expired.", show_alert=True)
