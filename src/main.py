@@ -217,6 +217,43 @@ def tmdb_caption(item: dict) -> str:
     return f"<b>{title}</b> ({year})\nType: <b>{media_type}</b>{rating_text}\n\n{overview}\n\n<i>Metadata provided by TMDB.</i>"
 
 
+async def auto_metadata_enabled() -> bool:
+    configured = await db.db.bot_settings.find_one({"_id": "auto_metadata"}) or {}
+    return configured.get("enabled", False)
+
+
+def tmdb_query_from_filename(name: str) -> str:
+    title = re.sub(r"\[[^]]*\]|\([^)]*\)", " ", name)
+    title = re.sub(r"\.(mkv|mp4|avi|webm|mov)$", "", title, flags=re.IGNORECASE)
+    title = re.sub(r"\b(480p|720p|1080p|1440p|2160p|4k|webrip|web-dl|bluray|brrip|hdrip|dvdrip|x264|x265|hevc|aac|ddp|atmos|hindi|english|telugu|tamil|dubbed)\b", " ", title, flags=re.IGNORECASE)
+    return normalize_query(title)
+
+
+async def enrich_video_metadata(record: dict) -> None:
+    if record.get("category") != "video" or not await auto_metadata_enabled():
+        return
+    query = tmdb_query_from_filename(record["name"])
+    if len(query) < 2:
+        return
+    item = await tmdb_lookup(query)
+    if not item:
+        return
+    date = item.get("release_date") or item.get("first_air_date") or ""
+    media_type = item["media_type"]
+    metadata = {
+        "id": item["id"],
+        "type": media_type,
+        "title": item.get("title") or item.get("name") or record["name"],
+        "year": date[:4] if date else None,
+        "rating": item.get("vote_average"),
+        "overview": item.get("overview") or "",
+        "poster_url": f"https://image.tmdb.org/t/p/w500{item['poster_path']}" if item.get("poster_path") else None,
+        "details_url": f"https://www.themoviedb.org/{media_type}/{item['id']}",
+    }
+    record["tmdb"] = metadata
+    record["search_text"] = normalize_query(f"{record['search_text']} {metadata['title']} {metadata.get('year') or ''}")
+
+
 def saved_alert_matches(alert_query: str, searchable_text: str) -> bool:
     query = normalize_query(alert_query).lower()
     haystack = normalize_query(searchable_text).lower()
@@ -493,8 +530,14 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
     if not settings.updates_channel_id:
         return
     tags = " ".join(f"#{tag}" for tag in record.get("tags", [])[:8])
-    caption_preview = record.get("caption", "").strip()[:250]
-    text = f"<b>New in AkMovieVerse</b>\n\n{record['kind']} <b>{record['name']}</b>"
+    caption_preview = escape(record.get("caption", "").strip()[:250])
+    metadata = record.get("tmdb") or {}
+    if metadata:
+        rating = metadata.get("rating")
+        rating_text = f"\nRating: <b>{rating:.1f}/10</b>" if isinstance(rating, (int, float)) and rating else ""
+        text = f"<b>New in AkMovieVerse</b>\n\n<b>{escape(metadata['title'])}</b> ({metadata.get('year') or '—'})\nType: <b>{metadata.get('type', 'video').title()}</b>{rating_text}\n\n{escape(metadata.get('overview') or record['name'])[:500]}"
+    else:
+        text = f"<b>New in AkMovieVerse</b>\n\n{record['kind']} <b>{escape(record['name'])}</b>"
     if caption_preview:
         text += f"\n\n{caption_preview}"
     if tags:
@@ -505,8 +548,17 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
             InlineKeyboardButton(text="🔎 Open in AkMovieVerse", url=f"https://t.me/{bot_username}?start=file_{file_id}")
         ]])
     try:
-        await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
+        if metadata.get("poster_url"):
+            await bot.send_photo(settings.updates_channel_id, metadata["poster_url"], caption=text[:1024], reply_markup=keyboard)
+        else:
+            await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
     except Exception as error:
+        if metadata.get("poster_url"):
+            try:
+                await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
+                return
+            except Exception:
+                pass
         logging.warning("Could not publish new-file announcement: %s", error)
 
 
@@ -782,6 +834,21 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     minutes = int(reward.total_seconds() // 60)
     await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
+
+
+@router.message(Command("autometa"))
+async def toggle_automatic_metadata(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if choice not in {"on", "off"}:
+        await message.answer(f"Automatic TMDB metadata is <b>{'on' if await auto_metadata_enabled() else 'off'}</b>.\nUse <code>/autometa on</code> or <code>/autometa off</code>.")
+        return
+    if choice == "on" and not settings.tmdb_api_key and not settings.tmdb_read_access_token:
+        await message.answer("Set <code>TMDB_READ_ACCESS_TOKEN</code> or <code>TMDB_API_KEY</code> in Koyeb first, then restart the bot.")
+        return
+    await db.db.bot_settings.update_one({"_id": "auto_metadata"}, {"$set": {"enabled": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Automatic TMDB metadata is now <b>{choice}</b> for newly indexed video files.")
 
 
 @router.message(Command("tmdb"))
@@ -1582,6 +1649,7 @@ async def index_channel_file(message: Message) -> None:
     if (await cleanup_settings())["remove_low_quality"] and low_quality_release(record):
         await log_index_cleanup(message.bot, f"Skipped new low-quality release: <b>{record['name']}</b>\nSource: <code>{message.chat.id}</code>")
         return
+    await enrich_video_metadata(record)
     index_result = await db.upsert_file(record)
     stored_file = await db.db.files.find_one(
         {"source_chat_id": message.chat.id, "source_message_id": message.message_id}, {"_id": 1}
@@ -1650,6 +1718,7 @@ async def owner_upload_inbox(message: Message) -> None:
         await log_index_cleanup(message.bot, f"Skipped owner-uploaded low-quality release: <b>{record['name']}</b>")
         await message.answer("⚠️ This CamRip / PreDVD-style file was copied to storage but skipped from the searchable index by auto-cleanup.")
         return
+    await enrich_video_metadata(record)
     index_result = await db.upsert_file(record)
     stored_file = await db.db.files.find_one(
         {"source_chat_id": storage.id, "source_message_id": copied.message_id}, {"_id": 1}
