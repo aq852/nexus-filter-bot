@@ -229,9 +229,9 @@ async def notify_saved_alerts(bot: Bot, record: dict, file_id: str) -> None:
     async for alert in db.db.search_alerts.find({}):
         if not saved_alert_matches(alert["query"], record["search_text"]):
             continue
-        token = await db.make_download_token(file_id, alert["user_id"])
+        token = await db.make_download_token(file_id, alert["user_id"], await delivery_token_minutes(alert["user_id"]))
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+            InlineKeyboardButton(text=await delivery_button_text(alert["user_id"]), callback_data=f"send:{token}")
         ]])
         try:
             await bot.send_message(
@@ -328,6 +328,27 @@ async def premium_until(user_id: int) -> datetime | None:
     user = await db.db.users.find_one({"user_id": user_id}, {"premium_until": 1}) or {}
     until = user.get("premium_until")
     return until if until and until > datetime.now(timezone.utc) else None
+
+
+async def delivery_token_minutes(user_id: int) -> int:
+    return 1_440 if await premium_until(user_id) else 10
+
+
+async def results_per_page_for(user_id: int) -> int:
+    return 20 if await premium_until(user_id) else settings.results_per_page
+
+
+async def delivery_button_text(user_id: int, language: str | None = None) -> str:
+    minutes = await delivery_token_minutes(user_id)
+    if minutes >= 60:
+        return "📥 Send to my DM (24h)"
+    return translate(language or await user_language(user_id), "send_to_dm")
+
+
+async def delivery_ready_text(user_id: int, language: str | None = None) -> str:
+    if await delivery_token_minutes(user_id) >= 60:
+        return "Your private delivery link is ready for 24 hours."
+    return translate(language or await user_language(user_id), "delivery_ready")
 
 
 async def verification_ok(user_id: int) -> bool:
@@ -437,7 +458,7 @@ def group_settings_text(group: dict) -> str:
 FILTERS = (("🎬 Video", "video"), ("📚 Books", "book"), ("🛠 Tools", "tool"), ("🎵 Audio", "audio"), ("📄 Other", "file"))
 
 
-def result_keyboard(files: list[dict], session_id: str, page: int, total: int, category: str | None = None) -> InlineKeyboardMarkup:
+def result_keyboard(files: list[dict], session_id: str, page: int, total: int, page_size: int, category: str | None = None) -> InlineKeyboardMarkup:
     rows = [
         [InlineKeyboardButton(text=f"{item['kind']} · {item['name'][:46]}", callback_data=f"file:{item['_id']}")]
         for item in files
@@ -446,7 +467,7 @@ def result_keyboard(files: list[dict], session_id: str, page: int, total: int, c
     navigation = []
     if page:
         navigation.append(InlineKeyboardButton(text="‹ Prev", callback_data=f"page:{session_id}:{category or 'all'}:{page - 1}"))
-    if (page + 1) * settings.results_per_page < total:
+    if (page + 1) * page_size < total:
         navigation.append(InlineKeyboardButton(text="Next ›", callback_data=f"page:{session_id}:{category or 'all'}:{page + 1}"))
     if navigation:
         rows.append(navigation)
@@ -493,7 +514,8 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
     clean_query = normalize_query(query)
     language = await user_language(user_id)
     await db.record_search(clean_query)
-    files, total = await db.search(clean_query, page, settings.results_per_page, category)
+    page_size = await results_per_page_for(user_id)
+    files, total = await db.search(clean_query, page, page_size, category)
     if not session_id:
         session_id = await db.save_search_session(user_id, message.chat.id, clean_query)
     if not files:
@@ -508,10 +530,10 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
         sent = await message.answer(f"{translate(language, 'no_results', query=clean_query)}{hint}{ad_text}", reply_markup=keyboard)
         asyncio.create_task(delete_later(sent))
         return
-    first = page * settings.results_per_page + 1
+    first = page * page_size + 1
     last = first + len(files) - 1
     filter_label = f" · {category.title()}" if category else ""
-    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, page, total, category), user_id)
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, page, total, page_size, category), user_id)
     sent = await message.answer(
         f"<b>Results for:</b> {clean_query}{filter_label}\nShowing {first}–{last} of {total}.\n\nChoose a type to narrow results, or tap a result for private delivery.{ad_text}",
         reply_markup=keyboard,
@@ -555,9 +577,9 @@ async def start(message: Message, command: CommandObject) -> None:
             return
         if not await require_verification(message):
             return
-        token = await db.make_download_token(str(file["_id"]), message.from_user.id)
+        token = await db.make_download_token(str(file["_id"]), message.from_user.id, await delivery_token_minutes(message.from_user.id))
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-            InlineKeyboardButton(text=translate(language, "send_to_dm"), callback_data=f"send:{token}")
+            InlineKeyboardButton(text=await delivery_button_text(message.from_user.id, language), callback_data=f"send:{token}")
         ]])
         await message.answer(f"<b>{file['name']}</b>\nYour private delivery button is ready.", reply_markup=keyboard)
         return
@@ -1575,9 +1597,9 @@ async def index_channel_file(message: Message) -> None:
         requester_ids = request.get("requesters") or ([request["user_id"]] if request.get("user_id") else [])
         delivered = 0
         for user_id in requester_ids:
-            token = await db.make_download_token(stored_file_id, user_id)
+            token = await db.make_download_token(stored_file_id, user_id, await delivery_token_minutes(user_id))
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-                InlineKeyboardButton(text="📥 Send to my DM (10 min)", callback_data=f"send:{token}")
+                InlineKeyboardButton(text=await delivery_button_text(user_id), callback_data=f"send:{token}")
             ]])
             try:
                 await message.bot.send_message(
@@ -1988,8 +2010,9 @@ async def paginate(callback: CallbackQuery) -> None:
         await callback.answer("This search expired. Please search again.", show_alert=True)
         return
     category = None if raw_category == "all" else raw_category
-    files, total = await db.search(session["query"], int(raw_page), settings.results_per_page, category)
-    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, int(raw_page), total, category), callback.from_user.id)
+    page_size = await results_per_page_for(callback.from_user.id)
+    files, total = await db.search(session["query"], int(raw_page), page_size, category)
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, int(raw_page), total, page_size, category), callback.from_user.id)
     await callback.message.edit_text(
         f"<b>Results for:</b> {session['query']}{f' · {category.title()}' if category else ''}{ad_text}",
         reply_markup=keyboard,
@@ -2004,11 +2027,12 @@ async def filter_results(callback: CallbackQuery) -> None:
     if not session or session["user_id"] != callback.from_user.id:
         await callback.answer("This search expired. Please search again.", show_alert=True)
         return
-    files, total = await db.search(session["query"], 0, settings.results_per_page, category)
+    page_size = await results_per_page_for(callback.from_user.id)
+    files, total = await db.search(session["query"], 0, page_size, category)
     if not files:
         await callback.answer(f"No {category} results for this search.", show_alert=True)
         return
-    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, 0, total, category), callback.from_user.id)
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, 0, total, page_size, category), callback.from_user.id)
     await callback.message.edit_text(
         f"<b>Results for:</b> {session['query']} · {category.title()}{ad_text}",
         reply_markup=keyboard,
@@ -2032,12 +2056,12 @@ async def prepare_download(callback: CallbackQuery) -> None:
     if not await require_verification(callback):
         await callback.answer()
         return
-    token = await db.make_download_token(str(file["_id"]), callback.from_user.id)
+    token = await db.make_download_token(str(file["_id"]), callback.from_user.id, await delivery_token_minutes(callback.from_user.id))
     language = await user_language(callback.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=translate(language, "send_to_dm"), callback_data=f"send:{token}")
+        InlineKeyboardButton(text=await delivery_button_text(callback.from_user.id, language), callback_data=f"send:{token}")
     ]])
-    await callback.message.answer(translate(language, "delivery_ready"), reply_markup=keyboard)
+    await callback.message.answer(await delivery_ready_text(callback.from_user.id, language), reply_markup=keyboard)
     await callback.answer()
 
 

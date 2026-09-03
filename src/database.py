@@ -109,9 +109,9 @@ class Database:
         except Exception:
             return None
 
-    async def make_download_token(self, file_id: str, user_id: int) -> str:
+    async def make_download_token(self, file_id: str, user_id: int, minutes: int = 10) -> str:
         result = await self.db.download_tokens.insert_one(
-            {"file_id": file_id, "user_id": user_id, "expires_at": datetime.now(timezone.utc) + timedelta(minutes=10)}
+            {"file_id": file_id, "user_id": user_id, "expires_at": datetime.now(timezone.utc) + timedelta(minutes=minutes)}
         )
         return str(result.inserted_id)
 

@@ -31,6 +31,7 @@ Anyone can add AkMovieVerse to a group and search one shared library. Only the o
 - Multi-channel force subscription and missing-file requests
 - Auto-delete, forward protection, custom captions, and group moderation
 - Private premium, referral rewards, shortlink verification, and sponsor ads
+- Premium perks: 24-hour delivery links, 20 results per page, no shortlinks, and no ads
 - Optional TMDB movie/series metadata with poster and rating
 
 ## User commands
