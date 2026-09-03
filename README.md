@@ -1,141 +1,159 @@
-# AkMovieVerse
+# 🎬 AkMovieVerse
 
-A centrally managed Telegram search bot that anyone can add to a group. It searches one shared library of files indexed from the owner's approved source channels.
+> A centrally managed Telegram auto-filter bot for searchable movie, series, books, apps, tools, and any other authorized files.
 
-## Included capabilities
+Anyone can add AkMovieVerse to a group and search one shared library. Only the owner manages source channels, premium, safety, monetization, and global settings.
 
-- Search a unified library from any group where the bot is present
-- Index documents, media, apps, archives, and other authorized files from owner-approved source channels
-- Smart search with typo suggestions, file-type filters, paginated results, and private user-bound delivery buttons that expire after ten minutes
-- Optional multi-channel force-subscription check, configurable missing-file requests, top-search analytics, broadcast, time-based multi-shortener verification, and an owner-only control panel
-- One owner-controlled configuration; group administrators do not manage separate libraries
-- Group-local tools for administrators: welcome messages, rules, keyword replies, blacklist, anti-spam, and search on/off
+## What it does
 
-## Technical direction
+| Search & delivery | Owner controls | Premium & growth |
+| --- | --- | --- |
+| Unified group and private-chat search | Source-channel indexing | Manual premium plans |
+| Smart suggestions, filters, and pagination | File cleanup and audit logs | Refer & Earn Premium |
+| Inline mode and private delivery links | Force subscription and requests | Redeem codes |
+| Protected forwarding and timed deletion | Maintenance, ads, captions, TMDB | Premium = no shortlinks / no ads |
 
-- Python 3.11+
-- aiogram 3 for Telegram handling
-- MongoDB for indexed files, settings, users, and requests
-- Docker Compose for local development and deployment
+## Start in 5 minutes
 
-## Project structure
+1. Create a bot with [@BotFather](https://t.me/BotFather).
+2. Copy `.env.example` to `.env`, then set `BOT_TOKEN`, `OWNER_ID`, and MongoDB values.
+3. Run locally with `docker compose up -d`, or deploy the worker to Koyeb with `python -m src.main`.
+4. Add the bot as an administrator in each source channel.
+5. In your private owner chat, run `/addsource -1001234567890`.
+6. Post authorized files to a source channel. They become searchable in every group where the bot is added.
 
-```text
-src/            bot application code
-tests/          automated tests
-docs/           setup and operating notes
-```
+## Main features
 
-## Quick start
+- Search from groups, private chat, or Telegram inline mode
+- Index documents, videos, audio, photos, archives, apps, and more
+- Filter results by video, books, tools, audio, or other files
+- Private user-bound delivery buttons with ten-minute expiry
+- Multi-channel force subscription and missing-file requests
+- Auto-delete, forward protection, custom captions, and group moderation
+- Private premium, referral rewards, shortlink verification, and sponsor ads
+- Optional TMDB movie/series metadata with poster and rating
 
-1. Create a bot with [@BotFather](https://t.me/BotFather), copy `.env.example` to `.env`, and set `BOT_TOKEN` and `OWNER_ID`.
-2. Start MongoDB with `docker compose up -d mongo`, then install and run the bot with `pip install -e .` and `python -m src.main`.
-3. Add the bot as an administrator in every source channel. From your private owner chat, run `/addsource -1001234567890` for each channel.
-4. Post authorized files to a source channel. The bot indexes its filename and caption automatically.
-5. Add the bot to any public group. Members can search by sending a title or filename.
+## User commands
 
-Useful owner commands: `/panel`, `/stats`, `/addsource`, `/removesource`, `/broadcast`, `/ban`, `/unban`, and `/closerequest`.
+| Command | Use |
+| --- | --- |
+| `/start` | Start the bot or open a private delivery link |
+| `/language` | Choose English, Hindi, or Bengali |
+| `/verify` | Get a shortlink-verification link when required |
+| `/myplan` | Check premium status and expiry |
+| `/refer` | Get your referral link when Refer & Earn is enabled |
+| `/redeem CODE` | Redeem a premium code |
 
-## Force subscription
+Send a title or filename in a group, or directly in DM when private search is enabled.
 
-The owner can require users to join multiple channels before private delivery. Add a channel with `/addfsub CHAT_ID | JOIN_LINK`; the link is optional for a public channel. Remove a channel with `/removefsub CHAT_ID`, or list them with `/fsub`. The bot checks membership in every configured channel and shows join buttons when links are available.
+## Owner command center
 
-## File management
+### Library & source channels
 
-Use `/recentfiles` or the **Recent files** control-panel button to get file IDs. Then manage indexed search metadata without reposting the file:
+| Command | Use |
+| --- | --- |
+| `/panel` or `/stats` | Open owner dashboard and statistics |
+| `/addsource CHAT_ID` | Add a source channel |
+| `/removesource CHAT_ID` | Remove a source channel |
+| `/recentfiles` | Show recent indexed files and IDs |
+| `/renamefile ID | Title` | Rename indexed search title |
+| `/addtags ID | tag1 tag2` | Add search tags |
+| `/removefile ID` | Remove one searchable record |
+| `/deletefiles ID ID` | Remove multiple records |
+| `/deletebyname text` | Remove records matching a title |
+| `/deleteolder DAYS` | Remove old records |
+| `/clearindex CONFIRM` | Clear the searchable index only |
+| `/autocleanup on|off` | Skip new CamRip / PreDVD / HDCam records |
 
-- `/renamefile FILE_ID | New title` updates the searchable display title.
-- `/addtags FILE_ID | tag1 tag2` adds search tags such as language, quality, or topic.
-- `/removefile FILE_ID` removes a stale entry from the searchable index; it does not delete the original Telegram channel post.
+### Members, premium & referrals
 
-## Owner upload inbox
+| Command | Use |
+| --- | --- |
+| `/ban USER_ID` · `/unban USER_ID` | Control access |
+| `/addpremium USER_ID | 30d` | Grant or extend premium |
+| `/removepremium USER_ID` | Revoke premium |
+| `/premiumstats` | Count active premium users |
+| `/referral on|off` | Enable or pause Refer & Earn |
+| `/referral 3d` | Set referral reward duration |
+| `/createcode CODE | 30d | 100` | Create a limited-use premium code |
+| `/codes` · `/deletecode CODE` | Review or delete redeem codes |
 
-Set `STORAGE_CHANNEL_ID` to an owner-controlled channel where the bot is an administrator. Then send a supported file to the bot in a private chat as the configured owner. The bot copies the file into that channel and indexes it immediately, so it is searchable in groups without manually posting it to a source channel.
+### Search, delivery & safety
 
-## New-content notifications
+| Command | Use |
+| --- | --- |
+| `/addfsub CHAT_ID | JOIN_LINK` | Add a required subscription channel |
+| `/removefsub CHAT_ID` · `/fsub` | Manage or list required channels |
+| `/requests on|off` | Toggle missing-file requests |
+| `/pmsearch on|off` | Allow or disable DM searching |
+| `/autodelete SECONDS` | Delete bot search/delivery messages after a delay |
+| `/protection on|off` | Restrict forwarding/saving on new deliveries |
+| `/deliverysettings` | View delivery safety settings |
+| `/setcaption template` | Set custom media caption using `{file_name}` and `{original_caption}` |
+| `/caption` · `/clearcaption` | View or remove custom caption |
+| `/maintenance on | Notice` | Pause public search and delivery |
+| `/maintenance off` | Restore normal use |
 
-Set `UPDATES_CHANNEL_ID` to a channel where the bot can post. Each newly indexed file then creates one formatted announcement with its title, type, optional caption/tags, and a button that opens the private delivery flow. Existing files are not announced again when their index record is updated.
+### Monetization & metadata
 
-## Inline search
+| Command | Use |
+| --- | --- |
+| `/setad Text | URL | Button` | Save sponsor ad for free users |
+| `/ads on|off` | Show or pause ads |
+| `/adstatus` · `/clearad` | Review or remove the ad |
+| `/tmdb Title` | Fetch TMDB poster, year, rating, and overview |
 
-Enable inline mode for the bot in BotFather using `/setinline`. After that, people can search from any Telegram chat with `@YourBotUsername title`. Each result uses a deep link that opens the bot privately; the user then completes the usual subscription check and receives a personal ten-minute delivery button.
+### Messaging & activity
 
-## Languages
+| Command | Use |
+| --- | --- |
+| `/broadcast message` | Broadcast to users |
+| `/schedule YYYY-MM-DD HH:MM | message` | Schedule a broadcast in `TIMEZONE` |
+| `/schedules` · `/cancelschedule ID` | Manage scheduled broadcasts |
+| `/autoreaction on|off` | Add automatic reactions to accepted group messages |
+| `/reactionemoji 👍` · `/reactionstatus` | Set or view the reaction emoji |
 
-Users can run `/language` to choose English, Hindi, or Bengali. AkMovieVerse stores the choice for each user and uses it for onboarding, missing-result notices, subscription prompts, and private-delivery controls. New user-facing features can reuse the same translation layer.
+## Group-admin commands
 
-## Scheduled broadcasts
+| Command | Use |
+| --- | --- |
+| `/settings` | Open group settings panel |
+| `/setwelcome text` · `/clearwelcome` | Manage welcome message |
+| `/setrules text` · `/rules` | Manage group rules |
+| `/filter keyword | reply` · `/stopfilter keyword` | Add/remove keyword replies |
+| `/blacklist word` · `/unblacklist word` | Manage blocked words |
+| `/antispam on|off` | Toggle basic anti-spam |
+| `/disable` · `/enable` | Disable or enable search in this group |
 
-Send a broadcast immediately with `/broadcast Your message`. To schedule one, use `/schedule YYYY-MM-DD HH:MM | Your message`; the time uses `TIMEZONE` (defaults to `Asia/Kolkata`). Use `/schedules` to list pending messages and `/cancelschedule SCHEDULE_ID` to cancel one. Scheduled sends are recorded in the owner control panel.
+## Koyeb deployment
 
-Group-admin commands: `/settings`, `/setwelcome`, `/clearwelcome`, `/setrules`, `/rules`, `/filter`, `/stopfilter`, `/blacklist`, `/unblacklist`, `/antispam on|off`, and `/disable` or `/enable`.
+Use two services from the same repository when shortlink verification is enabled:
 
-## Shortlink verification
+| Service | Run command | Purpose |
+| --- | --- | --- |
+| Worker | `python -m src.main` | Telegram bot polling |
+| Web | `uvicorn src.web:app --host 0.0.0.0 --port $PORT` | Verification callback |
 
-The verification system is disabled by default. It is built around a public callback URL, so deploy this repository twice on Koyeb: keep the bot as a **Worker** with `python -m src.main`, then create a **Web** service from the same repository using `uvicorn src.web:app --host 0.0.0.0 --port $PORT`. Copy the Web service's default `https://…koyeb.app` address into `VERIFY_BASE_URL` for both services.
+Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_URL` in both services. Use an external MongoDB deployment such as MongoDB Atlas.
 
-Add one or more compatible redirect providers with `/addshortener Name | https://provider.example/?url={url} | 09:00-23:00`. The `{url}` placeholder is replaced with a secure one-time AkMovieVerse callback; the time window is optional and uses `TIMEZONE`. Use `/shorteners` to inspect providers and `/shortener Name | on` or `/shortener Name | off` to change availability. AkMovieVerse picks an enabled provider in an active window and rotates by least-recent use.
+## Environment variables
 
-Enable the gate with `/verification on | 720`, where the final number is the verified-access period in minutes (5–43,200). Use `/verification off` to remove the gate. Users can run `/verify` if they need a fresh verification link. This generic redirect-template adapter supports many simple shorteners; providers that only expose a proprietary API will need their own adapter and API key, which should be stored as a Koyeb environment secret rather than sent in Telegram.
+| Variable | Required | Purpose |
+| --- | --- | --- |
+| `BOT_TOKEN` | Yes | BotFather token |
+| `OWNER_ID` | Yes | Numeric Telegram owner ID |
+| `MONGODB_URI` | Yes | MongoDB connection string |
+| `MONGODB_DATABASE` | Yes | Database name |
+| `STORAGE_CHANNEL_ID` | No | Owner private-upload storage channel |
+| `UPDATES_CHANNEL_ID` | No | New-file update channel |
+| `DELETION_LOG_CHANNEL_ID` | No | Index-cleanup audit channel |
+| `VERIFY_BASE_URL` | No | Public Koyeb Web callback URL |
+| `TMDB_READ_ACCESS_TOKEN` | No | Recommended TMDB credential |
+| `TMDB_API_KEY` | No | Alternative TMDB v3 credential |
 
-## Premium membership
+## Notes
 
-Premium is manual and does not use Telegram Stars or a payment provider. The owner can grant it with `/addpremium USER_ID | 30d` (or an hourly duration such as `12h`); extending an active plan adds time to its existing expiry. Use `/removepremium USER_ID` to revoke it and `/premiumstats` to see the active count. Users check their plan with `/myplan`.
-
-Premium users automatically bypass shortlink verification. This gives a useful premium benefit now while leaving payment methods, referral rewards, and redeem codes for a later phase.
-
-## Delivery safety controls
-
-The owner can control private-file safety globally. Use `/autodelete SECONDS` to delete new search-result messages and files delivered by the bot after a chosen delay; use `0` to disable it (maximum `604800`, or seven days). Use `/protection on` to ask Telegram to prevent forwarding and saving of newly delivered private files, or `/protection off` to disable that restriction. Check the current values with `/deliverysettings`.
-
-Telegram applies these controls to messages sent by the bot; it cannot delete copies or downloads a user made before the timer runs out.
-
-## Index cleanup
-
-These owner-only commands clean the searchable MongoDB index while preserving original Telegram posts: `/deletefiles FILE_ID FILE_ID` removes multiple entries, `/deletebyname text` removes entries whose titles match text, and `/deleteolder DAYS` removes older records. `/clearindex CONFIRM` clears the entire searchable index and deliberately requires the confirmation word.
-
-Use `/autocleanup on` to skip new posts whose names or captions look like PreDVD, CamRip, or HDCam releases; `/autocleanup off` turns this rule off. Set `DELETION_LOG_CHANNEL_ID` to receive an audit message for bulk cleanup actions and skipped releases.
-
-## Automatic group reactions
-
-The owner can enable a small reaction on new non-command text messages in every group with `/autoreaction on`; turn it off with `/autoreaction off`. Set the standard Telegram emoji using `/reactionemoji 👍` and check the setting with `/reactionstatus`. The bot must have permission to react in the group, and Telegram may limit reactions to the emojis allowed by that group.
-
-## Maintenance mode
-
-The owner can temporarily pause public search, inline results, verification links, and private file delivery with `/maintenance on | Optional notice`. Owner commands continue to work, so you can update source channels and settings while the pause is active. Run `/maintenance off` to restore normal use, or `/maintenance` to inspect the current notice and state.
-
-## Private-chat search
-
-Users can search the shared library by sending a title or filename directly to AkMovieVerse in a private chat. This is enabled by default. The owner can use `/pmsearch off` to make searches group-only, `/pmsearch on` to restore it, or `/pmsearch` to view the current state. Private results use the same protected delivery, subscription, verification, and premium rules as group results.
-
-## Refer & Earn Premium
-
-The owner can enable referrals with `/referral on` and choose the reward with `/referral 3d` or another premium duration such as `12h`. Users run `/refer` to receive a personal deep link. A referral stays pending after a genuine new user starts through that link; the referrer receives the premium reward and count only after the new user has joined every channel configured with `/addfsub`. The bot completes this automatically when it receives the channel-membership update, or on the referred user's next `/start`. Use `/referral off` to pause the program. Existing users, self-referrals, banned users, and the owner do not receive a reward.
-
-## Premium redeem codes
-
-Create limited-use premium codes with `/createcode MOVIE30 | 30d | 100`, where the final number is the maximum number of users who can redeem it. Users claim a code with `/redeem MOVIE30`; a user can claim each code only once, and successful redemptions extend an existing premium plan. The owner can inspect codes with `/codes` and remove one with `/deletecode MOVIE30`.
-
-## Ads for free users
-
-The owner can add a small sponsor button beneath search results using `/setad Sponsor text | https://example.com | Open sponsor`, then enable it with `/ads on`. Use `/ads off` to pause it, `/adstatus` to review the saved content, or `/clearad` to remove it. Ads are only shown to free users; premium users stay ad-free.
-
-## Custom delivery captions
-
-Set a reusable caption for newly delivered media with `/setcaption 🎬 {file_name}\n\n{original_caption}`. The supported placeholders are `{file_name}` and `{original_caption}`. Check it with `/caption` or remove it using `/clearcaption`. When no custom caption is set, AkMovieVerse preserves the source post’s original caption.
-
-## TMDB rich metadata
-
-Set either `TMDB_READ_ACCESS_TOKEN` (recommended) or `TMDB_API_KEY` as a Koyeb environment variable, then restart the bot. The owner can run `/tmdb Movie or series title` to fetch a rich TMDB result with a poster, year, rating, overview, and a source link. TMDB's API supports both API-key and Bearer-token application authentication; create credentials from your TMDB account’s API settings. [TMDB authentication guide](https://developer.themoviedb.org/docs/authentication-application)
-
-## Group settings panel
-
-Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
-
-## Request fulfilment
-
-Missing-file requests are grouped by search term and sent to the owner. When you add a likely matching authorized file to a source channel, the bot automatically marks the request fulfilled and privately notifies every requester with a ten-minute delivery button.
-
-The owner can turn this system on or off with `/requests on` or `/requests off`, or from the owner control panel. When it is off, the bot does not show request buttons or match new files to open requests.
-
-Only index and distribute content you own or are authorized to share.
+- Configure TMDB credentials in Koyeb before using `/tmdb`. [TMDB authentication guide](https://developer.themoviedb.org/docs/authentication-application)
+- Enable inline mode in BotFather with `/setinline` to use `@YourBot title` anywhere.
+- Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
+- Only index and distribute files that you own or are authorized to share.
