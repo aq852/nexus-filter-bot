@@ -90,6 +90,12 @@ The owner can control private-file safety globally. Use `/autodelete SECONDS` to
 
 Telegram applies these controls to messages sent by the bot; it cannot delete copies or downloads a user made before the timer runs out.
 
+## Index cleanup
+
+These owner-only commands clean the searchable MongoDB index while preserving original Telegram posts: `/deletefiles FILE_ID FILE_ID` removes multiple entries, `/deletebyname text` removes entries whose titles match text, and `/deleteolder DAYS` removes older records. `/clearindex CONFIRM` clears the entire searchable index and deliberately requires the confirmation word.
+
+Use `/autocleanup on` to skip new posts whose names or captions look like PreDVD, CamRip, or HDCam releases; `/autocleanup off` turns this rule off. Set `DELETION_LOG_CHANNEL_ID` to receive an audit message for bulk cleanup actions and skipped releases.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

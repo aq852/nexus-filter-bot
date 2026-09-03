@@ -1,6 +1,7 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+import re
+from datetime import datetime, timedelta, timezone
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -113,6 +114,25 @@ async def delivery_settings() -> dict:
         "auto_delete_seconds": configured.get("auto_delete_seconds", settings.auto_delete_seconds),
         "protect_content": configured.get("protect_content", False),
     }
+
+
+async def cleanup_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "cleanup"}) or {}
+    return {"remove_low_quality": configured.get("remove_low_quality", False)}
+
+
+async def log_index_cleanup(bot: Bot, text: str) -> None:
+    if not settings.deletion_log_channel_id:
+        return
+    try:
+        await bot.send_message(settings.deletion_log_channel_id, f"<b>AkMovieVerse index cleanup</b>\n\n{text}")
+    except Exception as error:
+        logging.warning("Could not post cleanup log: %s", error)
+
+
+def low_quality_release(record: dict) -> bool:
+    text = f"{record.get('name', '')} {record.get('caption', '')}".lower()
+    return any(term in text for term in ("predvd", "pre-dvd", "camrip", "cam rip", "hdcam"))
 
 
 async def verification_settings() -> dict:
@@ -751,6 +771,78 @@ async def remove_file(message: Message, command: CommandObject) -> None:
     await message.answer("✅ File removed from the searchable index." if result.deleted_count else "File not found.")
 
 
+@router.message(Command("deletefiles"))
+async def delete_multiple_files(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw_ids = re.split(r"[\s,]+", (command.args or "").strip())
+    try:
+        file_ids = [ObjectId(raw_id) for raw_id in raw_ids if raw_id]
+    except Exception:
+        await message.answer("Usage: <code>/deletefiles FILE_ID FILE_ID</code>\nYou can separate IDs with spaces or commas.")
+        return
+    if not file_ids:
+        await message.answer("Usage: <code>/deletefiles FILE_ID FILE_ID</code>")
+        return
+    result = await db.db.files.delete_many({"_id": {"$in": file_ids}})
+    await log_index_cleanup(message.bot, f"Removed <b>{result.deleted_count}</b> indexed file(s) by ID.\nOwner: <code>{message.from_user.id}</code>")
+    await message.answer(f"✅ Removed <b>{result.deleted_count}</b> file(s) from the searchable index.")
+
+
+@router.message(Command("deletebyname"))
+async def delete_files_by_name(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    query = (command.args or "").strip()
+    if len(query) < 2:
+        await message.answer("Usage: <code>/deletebyname title or filename</code>")
+        return
+    result = await db.db.files.delete_many({"name": {"$regex": re.escape(query), "$options": "i"}})
+    await log_index_cleanup(message.bot, f"Removed <b>{result.deleted_count}</b> indexed file(s) matching <code>{query}</code>.\nOwner: <code>{message.from_user.id}</code>")
+    await message.answer(f"✅ Removed <b>{result.deleted_count}</b> file(s) matching <b>{query}</b> from the searchable index.")
+
+
+@router.message(Command("deleteolder"))
+async def delete_old_files(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        days = int(command.args or "")
+        if not 1 <= days <= 3650:
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/deleteolder DAYS</code>\nExample: <code>/deleteolder 180</code>")
+        return
+    threshold = datetime.now(timezone.utc) - timedelta(days=days)
+    result = await db.db.files.delete_many({"created_at": {"$lt": threshold}})
+    await log_index_cleanup(message.bot, f"Removed <b>{result.deleted_count}</b> indexed file(s) older than <b>{days} days</b>.\nOwner: <code>{message.from_user.id}</code>")
+    await message.answer(f"✅ Removed <b>{result.deleted_count}</b> file(s) older than <b>{days} days</b> from the searchable index.")
+
+
+@router.message(Command("clearindex"))
+async def clear_index(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    if (command.args or "").strip() != "CONFIRM":
+        await message.answer("This clears every searchable file record but does not delete Telegram posts.\nTo continue: <code>/clearindex CONFIRM</code>")
+        return
+    result = await db.db.files.delete_many({})
+    await log_index_cleanup(message.bot, f"⚠️ Cleared the complete searchable index: <b>{result.deleted_count}</b> file record(s).\nOwner: <code>{message.from_user.id}</code>")
+    await message.answer(f"✅ Cleared <b>{result.deleted_count}</b> file record(s) from the searchable index.")
+
+
+@router.message(Command("autocleanup"))
+async def set_auto_cleanup(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/autocleanup on</code> or <code>/autocleanup off</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "cleanup"}, {"$set": {"remove_low_quality": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ CamRip / PreDVD index cleanup is <b>{choice}</b> for newly posted files.")
+
+
 @router.message(Command("panel"))
 async def panel(message: Message) -> None:
     if not is_owner(message.from_user.id):
@@ -828,6 +920,9 @@ async def index_channel_file(message: Message) -> None:
         "search_text": normalize_query(f"{name or ''} {caption}"),
         "created_at": datetime.now(timezone.utc),
     }
+    if (await cleanup_settings())["remove_low_quality"] and low_quality_release(record):
+        await log_index_cleanup(message.bot, f"Skipped new low-quality release: <b>{record['name']}</b>\nSource: <code>{message.chat.id}</code>")
+        return
     index_result = await db.upsert_file(record)
     stored_file = await db.db.files.find_one(
         {"source_chat_id": message.chat.id, "source_message_id": message.message_id}, {"_id": 1}
@@ -891,6 +986,10 @@ async def owner_upload_inbox(message: Message) -> None:
         "search_text": normalize_query(f"{name or ''} {caption}"),
         "created_at": datetime.now(timezone.utc),
     }
+    if (await cleanup_settings())["remove_low_quality"] and low_quality_release(record):
+        await log_index_cleanup(message.bot, f"Skipped owner-uploaded low-quality release: <b>{record['name']}</b>")
+        await message.answer("⚠️ This CamRip / PreDVD-style file was copied to storage but skipped from the searchable index by auto-cleanup.")
+        return
     index_result = await db.upsert_file(record)
     stored_file = await db.db.files.find_one(
         {"source_chat_id": storage.id, "source_message_id": copied.message_id}, {"_id": 1}
