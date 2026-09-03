@@ -60,11 +60,10 @@ Send a title or filename in a group, or directly in DM when private search is en
 | `/analytics` | View global search analytics (owner) |
 | `/addsource CHAT_ID` | Add a source channel |
 | `/removesource CHAT_ID` | Remove a source channel |
-| `/recentfiles` | Show recent indexed files and IDs |
-| `/renamefile ID | Title` | Rename indexed search title |
-| `/addtags ID | tag1 tag2` | Add search tags |
-| `/removefile ID` | Remove one searchable record |
-| `/deletefiles ID ID` | Remove multiple records |
+| `/recentfiles` | Show recent indexed file titles |
+| `/renamefile Search title | Title` | Search, tap, then rename a file |
+| `/addtags Search title | tag1 tag2` | Search, tap, then add tags |
+| `/removefile Search title` | Search, tap, then remove one record |
 | `/deletebyname text` | Remove records matching a title |
 | `/deleteolder DAYS` | Remove old records |
 | `/clearindex CONFIRM` | Clear the searchable index only |

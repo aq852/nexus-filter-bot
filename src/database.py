@@ -21,6 +21,7 @@ class Database:
         await self.db.redeem_codes.create_index("code", unique=True)
         await self.db.search_alerts.create_index([("user_id", 1), ("query", 1)], unique=True)
         await self.db.search_alerts.create_index("user_id")
+        await self.db.admin_file_actions.create_index("expires_at", expireAfterSeconds=0)
         await self.db.source_channels.create_index("chat_id", unique=True)
         await self.db.search_sessions.create_index("created_at", expireAfterSeconds=3600)
         await self.db.download_tokens.create_index("expires_at", expireAfterSeconds=0)

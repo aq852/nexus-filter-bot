@@ -1555,13 +1555,74 @@ async def toggle_request_system(message: Message, command: CommandObject) -> Non
     await message.answer(f"✅ Request system is now <b>{choice}</b>.")
 
 
+async def begin_admin_file_action(message: Message, action: str, query: str, payload: dict | None = None) -> None:
+    """Show an owner a short, title-based file picker for a management action."""
+    clean_query = normalize_query(query)
+    if len(clean_query) < 2:
+        await message.answer("Enter at least two characters from the file title.")
+        return
+    files, _ = await db.search(clean_query, 0, 10)
+    if not files:
+        await message.answer(f"No indexed files match <b>{escape(clean_query)}</b>.")
+        return
+    result = await db.db.admin_file_actions.insert_one({
+        "owner_id": message.from_user.id,
+        "action": action,
+        "payload": payload or {},
+        "expires_at": datetime.now(timezone.utc) + timedelta(minutes=15),
+    })
+    action_id = str(result.inserted_id)
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=f"{item['kind']} · {item['name'][:48]}", callback_data=f"adminfile:{action_id}:{item['_id']}")]
+        for item in files
+    ])
+    await message.answer(f"<b>Select the file to {action}</b>\nSearch: <i>{escape(clean_query)}</i>\n\nThe picker expires in 15 minutes.", reply_markup=keyboard)
+
+
+@router.callback_query(F.data.startswith("adminfile:"))
+async def apply_admin_file_action(callback: CallbackQuery) -> None:
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Owner only.", show_alert=True)
+        return
+    try:
+        _, action_id, file_id = callback.data.split(":", 2)
+        action = await db.db.admin_file_actions.find_one({"_id": ObjectId(action_id), "owner_id": callback.from_user.id})
+        file = await db.db.files.find_one({"_id": ObjectId(file_id)})
+    except Exception:
+        action = file = None
+    if not action or not file:
+        await callback.answer("This picker expired or the file is unavailable. Search again.", show_alert=True)
+        return
+    payload = action.get("payload", {})
+    if action["action"] == "rename":
+        name = payload["name"]
+        search_text = normalize_query(f"{name} {file.get('caption', '')} {' '.join(file.get('tags', []))}")
+        await db.db.files.update_one({"_id": file["_id"]}, {"$set": {"name": name, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
+        result_text = f"✅ Renamed <b>{escape(file['name'])}</b> to <b>{escape(name)}</b>."
+    elif action["action"] == "tags":
+        tags = payload["tags"]
+        merged_tags = list(dict.fromkeys([*file.get("tags", []), *tags]))
+        search_text = normalize_query(f"{file['name']} {file.get('caption', '')} {' '.join(merged_tags)}")
+        await db.db.files.update_one({"_id": file["_id"]}, {"$set": {"tags": merged_tags, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
+        result_text = f"✅ Tags added to <b>{escape(file['name'])}</b>: <code>{' '.join(merged_tags)}</code>"
+    elif action["action"] == "remove":
+        await db.db.files.delete_one({"_id": file["_id"]})
+        result_text = f"✅ Removed <b>{escape(file['name'])}</b> from the searchable index."
+    else:
+        await callback.answer("Unsupported action.", show_alert=True)
+        return
+    await db.db.admin_file_actions.delete_one({"_id": action["_id"]})
+    await callback.message.edit_text(result_text)
+    await callback.answer("Done.")
+
+
 @router.message(Command("recentfiles"))
 async def recent_files(message: Message) -> None:
     if not is_owner(message.from_user.id):
         return
     files = await db.db.files.find({}).sort("created_at", -1).to_list(length=20)
-    details = "\n".join(f"• <code>{item['_id']}</code> — {item['name'][:55]}" for item in files)
-    await message.answer(f"<b>Recently indexed files</b>\n{details or 'No files indexed yet.'}")
+    details = "\n".join(f"• {item['kind']} — {escape(item['name'][:70])}" for item in files)
+    await message.answer(f"<b>Recently indexed files</b>\n{details or 'No files indexed yet.'}\n\nManage by title: <code>/renamefile Search title | New title</code>")
 
 
 @router.message(Command("renamefile"))
@@ -1569,21 +1630,14 @@ async def rename_file(message: Message, command: CommandObject) -> None:
     if not is_owner(message.from_user.id):
         return
     try:
-        raw_id, name = (command.args or "").split("|", 1)
-        file_id = ObjectId(raw_id.strip())
+        query, name = (command.args or "").split("|", 1)
         name = name.strip()
         if not name:
             raise ValueError
-    except Exception:
-        await message.answer("Usage: <code>/renamefile FILE_ID | New searchable title</code>")
+    except ValueError:
+        await message.answer("Usage: <code>/renamefile Search title | New searchable title</code>")
         return
-    file = await db.db.files.find_one({"_id": file_id})
-    if not file:
-        await message.answer("File not found.")
-        return
-    search_text = normalize_query(f"{name} {file.get('caption', '')} {' '.join(file.get('tags', []))}")
-    await db.db.files.update_one({"_id": file_id}, {"$set": {"name": name, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
-    await message.answer("✅ File title updated and reindexed.")
+    await begin_admin_file_action(message, "rename", query, {"name": name})
 
 
 @router.message(Command("addtags"))
@@ -1591,36 +1645,26 @@ async def add_tags(message: Message, command: CommandObject) -> None:
     if not is_owner(message.from_user.id):
         return
     try:
-        raw_id, raw_tags = (command.args or "").split("|", 1)
-        file_id = ObjectId(raw_id.strip())
+        query, raw_tags = (command.args or "").split("|", 1)
         tags = [normalize_query(tag).lstrip("#").lower() for tag in raw_tags.replace(",", " ").split()]
         tags = list(dict.fromkeys(tag for tag in tags if tag))
         if not tags:
             raise ValueError
-    except Exception:
-        await message.answer("Usage: <code>/addtags FILE_ID | hindi 1080p action</code>")
+    except ValueError:
+        await message.answer("Usage: <code>/addtags Search title | hindi 1080p action</code>")
         return
-    file = await db.db.files.find_one({"_id": file_id})
-    if not file:
-        await message.answer("File not found.")
-        return
-    merged_tags = list(dict.fromkeys([*file.get("tags", []), *tags]))
-    search_text = normalize_query(f"{file['name']} {file.get('caption', '')} {' '.join(merged_tags)}")
-    await db.db.files.update_one({"_id": file_id}, {"$set": {"tags": merged_tags, "search_text": search_text, "updated_at": datetime.now(timezone.utc)}})
-    await message.answer(f"✅ Tags saved: <code>{' '.join(merged_tags)}</code>")
+    await begin_admin_file_action(message, "tags", query, {"tags": tags})
 
 
 @router.message(Command("removefile"))
 async def remove_file(message: Message, command: CommandObject) -> None:
     if not is_owner(message.from_user.id):
         return
-    try:
-        file_id = ObjectId(command.args or "")
-    except Exception:
-        await message.answer("Usage: <code>/removefile FILE_ID</code>")
+    query = (command.args or "").strip()
+    if not query:
+        await message.answer("Usage: <code>/removefile Search title</code>")
         return
-    result = await db.db.files.delete_one({"_id": file_id})
-    await message.answer("✅ File removed from the searchable index." if result.deleted_count else "File not found.")
+    await begin_admin_file_action(message, "remove", query)
 
 
 @router.message(Command("deletefiles"))
