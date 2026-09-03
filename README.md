@@ -110,7 +110,7 @@ Users can search the shared library by sending a title or filename directly to A
 
 ## Refer & Earn Premium
 
-The owner can enable referrals with `/referral on` and choose the reward with `/referral 3d` or another premium duration such as `12h`. Users run `/refer` to receive a personal deep link. When a genuine new user starts AkMovieVerse through that link, the referrer receives the configured premium time and a private confirmation. Use `/referral off` to pause the program. Existing users, self-referrals, banned users, and the owner do not receive a reward.
+The owner can enable referrals with `/referral on` and choose the reward with `/referral 3d` or another premium duration such as `12h`. Users run `/refer` to receive a personal deep link. A referral stays pending after a genuine new user starts through that link; the referrer receives the premium reward and count only after the new user has joined every channel configured with `/addfsub`. The bot completes this automatically when it receives the channel-membership update, or on the referred user's next `/start`. Use `/referral off` to pause the program. Existing users, self-referrals, banned users, and the owner do not receive a reward.
 
 ## Group settings panel
 

@@ -18,6 +18,7 @@ from aiogram.types import (
     InputTextMessageContent,
     Message,
     ReactionTypeEmoji,
+    ChatMemberUpdated,
 )
 from bson import ObjectId
 from pymongo import ReturnDocument
@@ -104,6 +105,17 @@ async def force_sub_keyboard() -> InlineKeyboardMarkup | None:
     return InlineKeyboardMarkup(inline_keyboard=rows) if rows else None
 
 
+@router.chat_member()
+async def complete_referral_after_channel_join(update: ChatMemberUpdated) -> None:
+    """React immediately when an invited user joins a configured force-sub channel."""
+    channels = await force_sub_channels()
+    if update.chat.id not in {channel["chat_id"] for channel in channels}:
+        return
+    if update.new_chat_member.status in {ChatMemberStatus.LEFT, ChatMemberStatus.KICKED}:
+        return
+    await complete_pending_referral(update.bot, update.new_chat_member.user.id)
+
+
 async def request_system_enabled() -> bool:
     setting = await db.db.bot_settings.find_one({"_id": "global"})
     return setting.get("request_system_enabled", True) if setting else True
@@ -168,6 +180,22 @@ async def award_referral(bot: Bot, inviter_id: int, new_user_id: int) -> datetim
     except Exception:
         pass
     return until
+
+
+async def complete_pending_referral(bot: Bot, referred_user_id: int) -> bool:
+    """Award one pending referral only after the invited user joined all force-sub channels."""
+    config = await referral_settings()
+    channels = await force_sub_channels()
+    if not config["enabled"] or not channels or not await subscription_ok(bot, referred_user_id):
+        return False
+    user = await db.db.users.find_one_and_update(
+        {"user_id": referred_user_id, "referral_status": "pending"},
+        {"$set": {"referral_status": "completed", "referral_completed_at": datetime.now(timezone.utc)}},
+        return_document=ReturnDocument.BEFORE,
+    )
+    if not user:
+        return False
+    return bool(await award_referral(bot, user["referred_by"], referred_user_id))
 
 
 async def react_to_group_message(message: Message) -> None:
@@ -403,14 +431,17 @@ async def start(message: Message, command: CommandObject) -> None:
         {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "last_seen": datetime.now(timezone.utc)}},
         upsert=True,
     )
-    if user_update.upserted_id and payload.startswith("ref_"):
+    if user_update.upserted_id and payload.startswith("ref_") and (await referral_settings())["enabled"]:
         try:
             inviter_id = int(payload.removeprefix("ref_"))
         except ValueError:
             inviter_id = 0
         if inviter_id and inviter_id != message.from_user.id:
-            await db.db.users.update_one({"user_id": message.from_user.id}, {"$set": {"referred_by": inviter_id}})
-            await award_referral(message.bot, inviter_id, message.from_user.id)
+            await db.db.users.update_one(
+                {"user_id": message.from_user.id},
+                {"$set": {"referred_by": inviter_id, "referral_status": "pending", "referral_created_at": datetime.now(timezone.utc)}},
+            )
+    await complete_pending_referral(message.bot, message.from_user.id)
     if await maintenance_active(message.from_user.id):
         await message.answer((await maintenance_settings())["message"])
         return
@@ -600,9 +631,13 @@ async def referral_link(message: Message) -> None:
     if not bot_username:
         await message.answer("Referral links are temporarily unavailable. Please try again soon.")
         return
+    channels = await force_sub_channels()
+    if not channels:
+        await message.answer("Refer & Earn needs the owner to configure at least one force-subscription channel first.")
+        return
     user = await db.db.users.find_one({"user_id": message.from_user.id}, {"referral_count": 1}) or {}
     link = f"https://t.me/{bot_username}?start=ref_{message.from_user.id}"
-    await message.answer(f"<b>Refer & Earn Premium</b>\n\nShare your personal link:\n<code>{link}</code>\n\nWhen a new user starts AkMovieVerse through it, you earn premium time. Successful referrals: <b>{user.get('referral_count', 0)}</b>")
+    await message.answer(f"<b>Refer & Earn Premium</b>\n\nShare your personal link:\n<code>{link}</code>\n\nYou earn premium only after the new user starts AkMovieVerse and joins every required channel. Successful referrals: <b>{user.get('referral_count', 0)}</b>")
 
 
 @router.message(Command("referral"))
@@ -616,7 +651,10 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
         return
     if raw in {"on", "off"}:
         await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"enabled": raw == "on"}}, upsert=True)
-        await message.answer(f"✅ Refer & Earn is now <b>{raw}</b>.")
+        if raw == "on" and not await force_sub_channels():
+            await message.answer("⚠️ Refer & Earn is on, but it will not award anything until you add at least one required channel with <code>/addfsub CHAT_ID | JOIN_LINK</code>.")
+        else:
+            await message.answer(f"✅ Refer & Earn is now <b>{raw}</b>.")
         return
     try:
         reward = parse_premium_duration(raw)
