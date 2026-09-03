@@ -112,6 +112,10 @@ Users can search the shared library by sending a title or filename directly to A
 
 The owner can enable referrals with `/referral on` and choose the reward with `/referral 3d` or another premium duration such as `12h`. Users run `/refer` to receive a personal deep link. A referral stays pending after a genuine new user starts through that link; the referrer receives the premium reward and count only after the new user has joined every channel configured with `/addfsub`. The bot completes this automatically when it receives the channel-membership update, or on the referred user's next `/start`. Use `/referral off` to pause the program. Existing users, self-referrals, banned users, and the owner do not receive a reward.
 
+## Premium redeem codes
+
+Create limited-use premium codes with `/createcode MOVIE30 | 30d | 100`, where the final number is the maximum number of users who can redeem it. Users claim a code with `/redeem MOVIE30`; a user can claim each code only once, and successful redemptions extend an existing premium plan. The owner can inspect codes with `/codes` and remove one with `/deletecode MOVIE30`.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

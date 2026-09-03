@@ -666,6 +666,84 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
 
 
+@router.message(Command("createcode"))
+async def create_redeem_code(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        raw_code, raw_duration, raw_limit = [part.strip() for part in (command.args or "").split("|", 2)]
+        code = raw_code.upper()
+        if not re.fullmatch(r"[A-Z0-9_-]{4,32}", code):
+            raise ValueError
+        duration = parse_premium_duration(raw_duration)
+        limit = int(raw_limit)
+        if not 1 <= limit <= 100_000:
+            raise ValueError
+    except (ValueError, TypeError):
+        await message.answer("Usage: <code>/createcode MOVIE30 | 30d | 100</code>\nCodes use 4–32 letters, numbers, <code>_</code>, or <code>-</code>.")
+        return
+    try:
+        await db.db.redeem_codes.insert_one({
+            "code": code,
+            "duration_minutes": int(duration.total_seconds() // 60),
+            "max_uses": limit,
+            "uses": 0,
+            "redeemed_by": [],
+            "created_at": datetime.now(timezone.utc),
+            "created_by": message.from_user.id,
+        })
+    except Exception:
+        await message.answer("That code already exists. Choose a different one.")
+        return
+    await message.answer(f"✅ Redeem code <code>{code}</code> created: <b>{raw_duration}</b>, maximum <b>{limit}</b> users.")
+
+
+@router.message(Command("redeem"))
+async def redeem_code(message: Message, command: CommandObject) -> None:
+    code = (command.args or "").strip().upper()
+    if not code:
+        await message.answer("Usage: <code>/redeem CODE</code>")
+        return
+    redeemed = await db.db.redeem_codes.find_one_and_update(
+        {"code": code, "redeemed_by": {"$ne": message.from_user.id}, "$expr": {"$lt": ["$uses", "$max_uses"]}},
+        {"$addToSet": {"redeemed_by": message.from_user.id}, "$inc": {"uses": 1}},
+        return_document=ReturnDocument.AFTER,
+    )
+    if not redeemed:
+        await message.answer("This code is invalid, already used by you, or has reached its limit.")
+        return
+    current = await premium_until(message.from_user.id)
+    starts_at = current or datetime.now(timezone.utc)
+    until = starts_at + timedelta(minutes=redeemed["duration_minutes"])
+    await db.db.users.update_one(
+        {"user_id": message.from_user.id},
+        {"$set": {"user_id": message.from_user.id, "name": message.from_user.full_name, "premium_until": until, "premium_granted_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    await message.answer(f"🎉 Code accepted. Premium is active until <b>{until.astimezone(ZoneInfo(settings.timezone)):%d %b %Y, %I:%M %p}</b>.")
+
+
+@router.message(Command("codes"))
+async def list_redeem_codes(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    codes = await db.db.redeem_codes.find({}).sort("created_at", -1).limit(30).to_list(length=30)
+    lines = [f"• <code>{item['code']}</code> — {item['uses']}/{item['max_uses']} used — {item['duration_minutes']} min" for item in codes]
+    await message.answer("<b>Redeem codes</b>\n" + ("\n".join(lines) if lines else "No codes created."))
+
+
+@router.message(Command("deletecode"))
+async def delete_redeem_code(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    code = (command.args or "").strip().upper()
+    if not code:
+        await message.answer("Usage: <code>/deletecode CODE</code>")
+        return
+    result = await db.db.redeem_codes.delete_one({"code": code})
+    await message.answer("✅ Redeem code deleted." if result.deleted_count else "Code not found.")
+
+
 @router.message(Command("addpremium"))
 async def add_premium(message: Message, command: CommandObject) -> None:
     if not is_owner(message.from_user.id):
