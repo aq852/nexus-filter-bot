@@ -17,6 +17,7 @@ from aiogram.types import (
     InlineQueryResultArticle,
     InputTextMessageContent,
     Message,
+    ReactionTypeEmoji,
 )
 from bson import ObjectId
 from pymongo import ReturnDocument
@@ -119,6 +120,25 @@ async def delivery_settings() -> dict:
 async def cleanup_settings() -> dict:
     configured = await db.db.bot_settings.find_one({"_id": "cleanup"}) or {}
     return {"remove_low_quality": configured.get("remove_low_quality", False)}
+
+
+async def auto_reaction_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "auto_reaction"}) or {}
+    return {"enabled": configured.get("enabled", False), "emoji": configured.get("emoji", "👍")}
+
+
+async def react_to_group_message(message: Message) -> None:
+    config = await auto_reaction_settings()
+    if not config["enabled"]:
+        return
+    try:
+        await message.bot.set_message_reaction(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=config["emoji"])],
+        )
+    except Exception as error:
+        logging.debug("Could not add automatic reaction: %s", error)
 
 
 async def log_index_cleanup(bot: Bot, text: str) -> None:
@@ -428,6 +448,40 @@ async def show_delivery_settings(message: Message) -> None:
         f"Forward protection: <b>{'on' if current['protect_content'] else 'off'}</b>\n\n"
         "Set: <code>/autodelete SECONDS</code>\nProtect: <code>/protection on</code>"
     )
+
+
+@router.message(Command("autoreaction"))
+async def set_auto_reaction(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/autoreaction on</code> or <code>/autoreaction off</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "auto_reaction"}, {"$set": {"enabled": choice == "on"}}, upsert=True)
+    current = await auto_reaction_settings()
+    emoji_hint = f" ({current['emoji']})" if choice == "on" else ""
+    await message.answer(f"✅ Auto reaction is <b>{choice}</b>{emoji_hint} for new group text messages.")
+
+
+@router.message(Command("reactionemoji"))
+async def set_reaction_emoji(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    emoji = (command.args or "").strip()
+    if not emoji or len(emoji) > 8:
+        await message.answer("Usage: <code>/reactionemoji 👍</code>\nUse one standard Telegram emoji.")
+        return
+    await db.db.bot_settings.update_one({"_id": "auto_reaction"}, {"$set": {"emoji": emoji}}, upsert=True)
+    await message.answer(f"✅ Auto-reaction emoji set to {emoji}. Use <code>/autoreaction on</code> to enable it.")
+
+
+@router.message(Command("reactionstatus"))
+async def auto_reaction_status(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    current = await auto_reaction_settings()
+    await message.answer(f"<b>Auto reaction</b>: <b>{'on' if current['enabled'] else 'off'}</b>\nEmoji: {current['emoji']}\n\nUse <code>/autoreaction on</code> or <code>/reactionemoji ❤️</code>.")
 
 
 def parse_premium_duration(value: str) -> timedelta:
@@ -1185,6 +1239,7 @@ async def group_search(message: Message) -> None:
                 pass
             return
         recent_messages[key] = now
+    await react_to_group_message(message)
     keyword_filter = await db.db.keyword_filters.find_one({"chat_id": message.chat.id, "keyword": lower_text})
     if keyword_filter:
         await message.reply(keyword_filter["reply"])

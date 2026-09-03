@@ -96,6 +96,10 @@ These owner-only commands clean the searchable MongoDB index while preserving or
 
 Use `/autocleanup on` to skip new posts whose names or captions look like PreDVD, CamRip, or HDCam releases; `/autocleanup off` turns this rule off. Set `DELETION_LOG_CHANNEL_ID` to receive an audit message for bulk cleanup actions and skipped releases.
 
+## Automatic group reactions
+
+The owner can enable a small reaction on new non-command text messages in every group with `/autoreaction on`; turn it off with `/autoreaction off`. Set the standard Telegram emoji using `/reactionemoji 👍` and check the setting with `/reactionstatus`. The bot must have permission to react in the group, and Telegram may limit reactions to the emojis allowed by that group.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.
