@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     timezone: str = "Asia/Kolkata"
     storage_channel_id: int | None = None
     updates_channel_id: int | None = None
+    # Public HTTPS address of the web service used for verification callbacks.
+    # Example: https://your-service.koyeb.app (no trailing slash).
+    verify_base_url: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
 

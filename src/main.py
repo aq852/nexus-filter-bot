@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime, timezone
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 from aiogram import Bot, Dispatcher, F, Router
@@ -103,6 +104,62 @@ async def force_sub_keyboard() -> InlineKeyboardMarkup | None:
 async def request_system_enabled() -> bool:
     setting = await db.db.bot_settings.find_one({"_id": "global"})
     return setting.get("request_system_enabled", True) if setting else True
+
+
+async def verification_settings() -> dict:
+    return await db.db.bot_settings.find_one({"_id": "verification"}) or {"enabled": False, "valid_minutes": 720}
+
+
+async def verification_ok(user_id: int) -> bool:
+    config = await verification_settings()
+    if not config.get("enabled", False):
+        return True
+    user = await db.db.users.find_one({"user_id": user_id}, {"verified_until": 1}) or {}
+    until = user.get("verified_until")
+    return bool(until and until > datetime.now(timezone.utc))
+
+
+async def active_shortener() -> dict | None:
+    """Choose an enabled provider, respecting optional daily local-time windows."""
+    now = datetime.now(ZoneInfo(settings.timezone)).strftime("%H:%M")
+    providers = await db.db.shorteners.find({"enabled": True}).sort([("priority", 1), ("last_used_at", 1)]).to_list(length=50)
+    for provider in providers:
+        start, end = provider.get("window_start"), provider.get("window_end")
+        if not start or not end or (start <= end and start <= now <= end) or (start > end and (now >= start or now <= end)):
+            return provider
+    return None
+
+
+async def verification_keyboard(user_id: int) -> InlineKeyboardMarkup | None:
+    if not settings.verify_base_url:
+        return None
+    provider = await active_shortener()
+    if not provider:
+        return None
+    config = await verification_settings()
+    token = await db.create_verification_token(user_id, provider["name"], int(config.get("valid_minutes", 720)))
+    callback_url = f"{settings.verify_base_url.rstrip('/')}/verify/{token}"
+    try:
+        url = provider["url_template"].replace("{url}", quote(callback_url, safe=""))
+    except Exception:
+        return None
+    await db.db.shorteners.update_one({"_id": provider["_id"]}, {"$set": {"last_used_at": datetime.now(timezone.utc)}})
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=f"Verify via {provider['name']}", url=url)
+    ]])
+
+
+async def require_verification(message: Message | CallbackQuery) -> bool:
+    user_id = message.from_user.id
+    if await verification_ok(user_id):
+        return True
+    keyboard = await verification_keyboard(user_id)
+    text = "Verification is required before file delivery. Complete it once to unlock access for the owner-selected time."
+    if keyboard:
+        await message.message.answer(text, reply_markup=keyboard) if isinstance(message, CallbackQuery) else await message.answer(text, reply_markup=keyboard)
+    else:
+        await message.message.answer("Verification is enabled, but no active shortener is configured. Please contact the owner.") if isinstance(message, CallbackQuery) else await message.answer("Verification is enabled, but no active shortener is configured. Please contact the owner.")
+    return False
 
 
 async def is_group_admin(message: Message) -> bool:
@@ -253,6 +310,8 @@ async def start(message: Message, command: CommandObject) -> None:
         if not await subscription_ok(message.bot, message.from_user.id):
             await message.answer(translate(language, "join_required"), reply_markup=await force_sub_keyboard())
             return
+        if not await require_verification(message):
+            return
         token = await db.make_download_token(str(file["_id"]), message.from_user.id)
         keyboard = InlineKeyboardMarkup(inline_keyboard=[[
             InlineKeyboardButton(text=translate(language, "send_to_dm"), callback_data=f"send:{token}")
@@ -269,6 +328,90 @@ async def start(message: Message, command: CommandObject) -> None:
 async def language_selector(message: Message) -> None:
     language = await user_language(message.from_user.id)
     await message.answer(translate(language, "choose_language"), reply_markup=language_keyboard())
+
+
+@router.message(Command("verify"))
+async def verify_access(message: Message) -> None:
+    if await verification_ok(message.from_user.id):
+        await message.answer("Your access is already verified.")
+        return
+    keyboard = await verification_keyboard(message.from_user.id)
+    if not keyboard:
+        await message.answer("Verification is unavailable right now. Please contact the owner.")
+        return
+    await message.answer("Complete verification, then return here. Your verified access lasts for the owner-selected time.", reply_markup=keyboard)
+
+
+@router.message(Command("verification"))
+async def manage_verification(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw = (command.args or "").strip().lower()
+    if not raw:
+        config = await verification_settings()
+        await message.answer(f"Verification is <b>{'on' if config.get('enabled') else 'off'}</b>; validity: <b>{config.get('valid_minutes', 720)} minutes</b>.\nUsage: <code>/verification on | 720</code> or <code>/verification off</code>")
+        return
+    choice, _, duration = raw.partition("|")
+    choice = choice.strip()
+    if choice not in {"on", "off"}:
+        await message.answer("Usage: <code>/verification on | 720</code> or <code>/verification off</code>")
+        return
+    minutes = 720
+    if duration.strip():
+        try:
+            minutes = max(5, min(int(duration.strip()), 43_200))
+        except ValueError:
+            await message.answer("Verification duration must be a number of minutes (5 to 43200).")
+            return
+    await db.db.bot_settings.update_one({"_id": "verification"}, {"$set": {"enabled": choice == "on", "valid_minutes": minutes}}, upsert=True)
+    await message.answer(f"✅ Verification is now <b>{choice}</b> with a <b>{minutes}-minute</b> verified period.")
+
+
+@router.message(Command("addshortener"))
+async def add_shortener(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        name, template, *options = [part.strip() for part in (command.args or "").split("|")]
+        if not name or "{url}" not in template or not template.startswith(("https://", "http://")):
+            raise ValueError
+        window = options[0] if options else ""
+        start, end = (window.split("-", 1) if "-" in window else (None, None))
+        if start and (len(start) != 5 or len(end) != 5):
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/addshortener Name | https://provider.example/?url={url} | 09:00-23:00</code>\nThe time window is optional and uses TIMEZONE. The template must contain <code>{url}</code>.")
+        return
+    await db.db.shorteners.update_one(
+        {"name": name},
+        {"$set": {"name": name, "url_template": template, "window_start": start, "window_end": end, "enabled": True, "priority": 100, "updated_at": datetime.now(timezone.utc)}},
+        upsert=True,
+    )
+    await message.answer(f"✅ Shortener <b>{name}</b> added and enabled.")
+
+
+@router.message(Command("shorteners"))
+async def list_shorteners(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    providers = await db.db.shorteners.find({}).sort([("priority", 1), ("name", 1)]).to_list(length=50)
+    rows = [f"• <b>{item['name']}</b> — {'on' if item.get('enabled') else 'off'} — {item.get('window_start') or 'all day'}{('-' + item['window_end']) if item.get('window_end') else ''}" for item in providers]
+    await message.answer("<b>Shortener providers</b>\n" + ("\n".join(rows) if rows else "None configured."))
+
+
+@router.message(Command("shortener"))
+async def toggle_shortener(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        name, choice = [part.strip() for part in (command.args or "").split("|", 1)]
+        if choice.lower() not in {"on", "off"}:
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/shortener Name | on</code> or <code>/shortener Name | off</code>")
+        return
+    result = await db.db.shorteners.update_one({"name": name}, {"$set": {"enabled": choice.lower() == "on"}})
+    await message.answer(f"✅ Shortener <b>{name}</b> {'enabled' if choice.lower() == 'on' else 'disabled'}." if result.matched_count else "Shortener not found.")
 
 
 @router.callback_query(F.data.startswith("language:"))
@@ -984,6 +1127,9 @@ async def prepare_download(callback: CallbackQuery) -> None:
         await callback.message.answer(translate(await user_language(callback.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
         await callback.answer()
         return
+    if not await require_verification(callback):
+        await callback.answer()
+        return
     token = await db.make_download_token(str(file["_id"]), callback.from_user.id)
     language = await user_language(callback.from_user.id)
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
@@ -1001,6 +1147,9 @@ async def send_file(callback: CallbackQuery) -> None:
         return
     if not await subscription_ok(callback.bot, callback.from_user.id):
         await callback.message.answer(translate(await user_language(callback.from_user.id), "join_required"), reply_markup=await force_sub_keyboard())
+        await callback.answer()
+        return
+    if not await require_verification(callback):
         await callback.answer()
         return
     file = await db.db.files.find_one({"_id": ObjectId(token["file_id"])})

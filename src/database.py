@@ -4,6 +4,7 @@ from difflib import SequenceMatcher
 from .utils import normalize_query
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
+from pymongo import ReturnDocument
 
 
 class Database:
@@ -24,9 +25,34 @@ class Database:
         await self.db.blacklist.create_index([("chat_id", 1), ("word", 1)], unique=True)
         await self.db.scheduled_broadcasts.create_index([("status", 1), ("due_at", 1)])
         await self.db.force_sub_channels.create_index("chat_id", unique=True)
+        await self.db.shorteners.create_index("name", unique=True)
+        await self.db.verification_tokens.create_index("expires_at", expireAfterSeconds=0)
+        await self.db.verification_tokens.create_index([("user_id", 1), ("expires_at", 1)])
 
     async def close(self) -> None:
         self.client.close()
+
+    async def create_verification_token(self, user_id: int, provider: str, minutes: int) -> str:
+        result = await self.db.verification_tokens.insert_one({
+            "user_id": user_id,
+            "provider": provider,
+            "created_at": datetime.now(timezone.utc),
+            "expires_at": datetime.now(timezone.utc) + timedelta(minutes=30),
+            "verification_minutes": minutes,
+            "completed": False,
+        })
+        return str(result.inserted_id)
+
+    async def complete_verification_token(self, token: str) -> dict | None:
+        from bson import ObjectId
+        try:
+            return await self.db.verification_tokens.find_one_and_update(
+                {"_id": ObjectId(token), "expires_at": {"$gt": datetime.now(timezone.utc)}},
+                {"$set": {"completed": True, "completed_at": datetime.now(timezone.utc)}},
+                return_document=ReturnDocument.AFTER,
+            )
+        except Exception:
+            return None
 
     async def is_source_channel(self, chat_id: int) -> bool:
         return await self.db.source_channels.find_one({"chat_id": chat_id}) is not None
