@@ -47,9 +47,8 @@ async def user_language(user_id: int) -> str:
 
 
 def language_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=name, callback_data=f"language:{code}") for code, name in LANGUAGES.items()
-    ]])
+    buttons = [InlineKeyboardButton(text=name, callback_data=f"language:{code}") for code, name in LANGUAGES.items()]
+    return InlineKeyboardMarkup(inline_keyboard=[buttons[index:index + 3] for index in range(0, len(buttons), 3)])
 
 
 def panel_keyboard() -> InlineKeyboardMarkup:

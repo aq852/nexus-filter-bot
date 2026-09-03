@@ -38,7 +38,7 @@ Anyone can add AkMovieVerse to a group and search one shared library. Only the o
 | Command | Use |
 | --- | --- |
 | `/start` | Start the bot or open a private delivery link |
-| `/language` | Choose English, Hindi, or Bengali |
+| `/language` | Choose English, Hindi, Bengali, Tamil, Telugu, Malayalam, Kannada, Marathi, or Urdu |
 | `/verify` | Get a shortlink-verification link when required |
 | `/myplan` | Check premium status and expiry |
 | `/refer` | Get your referral link when Refer & Earn is enabled |
