@@ -116,6 +116,10 @@ The owner can enable referrals with `/referral on` and choose the reward with `/
 
 Create limited-use premium codes with `/createcode MOVIE30 | 30d | 100`, where the final number is the maximum number of users who can redeem it. Users claim a code with `/redeem MOVIE30`; a user can claim each code only once, and successful redemptions extend an existing premium plan. The owner can inspect codes with `/codes` and remove one with `/deletecode MOVIE30`.
 
+## Ads for free users
+
+The owner can add a small sponsor button beneath search results using `/setad Sponsor text | https://example.com | Open sponsor`, then enable it with `/ads on`. Use `/ads off` to pause it, `/adstatus` to review the saved content, or `/clearad` to remove it. Ads are only shown to free users; premium users stay ad-free.
+
 ## Group settings panel
 
 Group administrators can open `/settings` to toggle group search and anti-spam using buttons, view the current rules, and see the relevant management commands. This panel only changes settings for the current group; it never changes the shared file library.

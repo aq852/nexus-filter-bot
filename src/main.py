@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timedelta, timezone
+from html import escape
 from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
@@ -159,6 +160,27 @@ async def pm_search_enabled() -> bool:
 async def referral_settings() -> dict:
     configured = await db.db.bot_settings.find_one({"_id": "referral"}) or {}
     return {"enabled": configured.get("enabled", False), "reward_minutes": configured.get("reward_minutes", 1_440)}
+
+
+async def ad_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "ad"}) or {}
+    return {
+        "enabled": configured.get("enabled", False),
+        "text": configured.get("text", ""),
+        "url": configured.get("url", ""),
+        "button_text": configured.get("button_text", "Open sponsor"),
+    }
+
+
+async def add_ad_to_results(keyboard: InlineKeyboardMarkup | None, user_id: int) -> tuple[str, InlineKeyboardMarkup | None]:
+    if await premium_until(user_id):
+        return "", keyboard
+    ad = await ad_settings()
+    if not ad["enabled"] or not ad["text"] or not ad["url"]:
+        return "", keyboard
+    rows = list(keyboard.inline_keyboard) if keyboard else []
+    rows.append([InlineKeyboardButton(text=ad["button_text"], url=ad["url"])])
+    return f"\n\n<i>{escape(ad['text'])}</i>", InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 async def award_referral(bot: Bot, inviter_id: int, new_user_id: int) -> datetime | None:
@@ -408,17 +430,19 @@ async def render_results(message: Message, user_id: int, query: str, page: int, 
             keyboard = InlineKeyboardMarkup(inline_keyboard=[[
                 InlineKeyboardButton(text="📩 Request this", callback_data=f"request:{session_id}")
             ]])
+        ad_text, keyboard = await add_ad_to_results(keyboard, user_id)
         suggestions = await db.suggestions(clean_query)
         hint = "\n<b>Did you mean:</b> " + " • ".join(suggestions) if suggestions else ""
-        sent = await message.answer(f"{translate(language, 'no_results', query=clean_query)}{hint}", reply_markup=keyboard)
+        sent = await message.answer(f"{translate(language, 'no_results', query=clean_query)}{hint}{ad_text}", reply_markup=keyboard)
         asyncio.create_task(delete_later(sent))
         return
     first = page * settings.results_per_page + 1
     last = first + len(files) - 1
     filter_label = f" · {category.title()}" if category else ""
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, page, total, category), user_id)
     sent = await message.answer(
-        f"<b>Results for:</b> {clean_query}{filter_label}\nShowing {first}–{last} of {total}.\n\nChoose a type to narrow results, or tap a result for private delivery.",
-        reply_markup=result_keyboard(files, session_id, page, total, category),
+        f"<b>Results for:</b> {clean_query}{filter_label}\nShowing {first}–{last} of {total}.\n\nChoose a type to narrow results, or tap a result for private delivery.{ad_text}",
+        reply_markup=keyboard,
     )
     asyncio.create_task(delete_later(sent))
 
@@ -664,6 +688,60 @@ async def manage_referrals(message: Message, command: CommandObject) -> None:
     minutes = int(reward.total_seconds() // 60)
     await db.db.bot_settings.update_one({"_id": "referral"}, {"$set": {"reward_minutes": minutes}}, upsert=True)
     await message.answer(f"✅ Referral reward set to <b>{raw}</b> of premium time per new user.")
+
+
+@router.message(Command("setad"))
+async def set_ad(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    try:
+        text, url, *button = [part.strip() for part in (command.args or "").split("|")]
+        if not text or not url.startswith(("https://", "http://")):
+            raise ValueError
+        button_text = button[0] if button and button[0] else "Open sponsor"
+    except ValueError:
+        await message.answer("Usage: <code>/setad Sponsor text | https://example.com | Open sponsor</code>")
+        return
+    await db.db.bot_settings.update_one(
+        {"_id": "ad"},
+        {"$set": {"text": text[:300], "url": url, "button_text": button_text[:64]}},
+        upsert=True,
+    )
+    await message.answer("✅ Ad content saved. Use <code>/ads on</code> to show it to free users.")
+
+
+@router.message(Command("ads"))
+async def toggle_ads(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    choice = (command.args or "").strip().lower()
+    if choice not in {"on", "off"}:
+        current = await ad_settings()
+        await message.answer(f"Ads are <b>{'on' if current['enabled'] else 'off'}</b>.\nUse <code>/ads on</code> or <code>/ads off</code>.")
+        return
+    if choice == "on":
+        current = await ad_settings()
+        if not current["text"] or not current["url"]:
+            await message.answer("Set the ad first: <code>/setad Text | https://link | Button</code>")
+            return
+    await db.db.bot_settings.update_one({"_id": "ad"}, {"$set": {"enabled": choice == "on"}}, upsert=True)
+    await message.answer(f"✅ Ads are now <b>{choice}</b>. Premium users remain ad-free.")
+
+
+@router.message(Command("adstatus"))
+async def show_ad_status(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    current = await ad_settings()
+    await message.answer(f"<b>Ads</b>: <b>{'on' if current['enabled'] else 'off'}</b>\nText: {escape(current['text']) or 'Not set'}\nURL: <code>{escape(current['url']) or 'Not set'}</code>")
+
+
+@router.message(Command("clearad"))
+async def clear_ad(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await db.db.bot_settings.update_one({"_id": "ad"}, {"$set": {"enabled": False, "text": "", "url": "", "button_text": "Open sponsor"}}, upsert=True)
+    await message.answer("✅ Ad disabled and cleared.")
 
 
 @router.message(Command("createcode"))
@@ -1653,9 +1731,10 @@ async def paginate(callback: CallbackQuery) -> None:
         return
     category = None if raw_category == "all" else raw_category
     files, total = await db.search(session["query"], int(raw_page), settings.results_per_page, category)
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, int(raw_page), total, category), callback.from_user.id)
     await callback.message.edit_text(
-        f"<b>Results for:</b> {session['query']}{f' · {category.title()}' if category else ''}",
-        reply_markup=result_keyboard(files, session_id, int(raw_page), total, category),
+        f"<b>Results for:</b> {session['query']}{f' · {category.title()}' if category else ''}{ad_text}",
+        reply_markup=keyboard,
     )
     await callback.answer()
 
@@ -1671,9 +1750,10 @@ async def filter_results(callback: CallbackQuery) -> None:
     if not files:
         await callback.answer(f"No {category} results for this search.", show_alert=True)
         return
+    ad_text, keyboard = await add_ad_to_results(result_keyboard(files, session_id, 0, total, category), callback.from_user.id)
     await callback.message.edit_text(
-        f"<b>Results for:</b> {session['query']} · {category.title()}",
-        reply_markup=result_keyboard(files, session_id, 0, total, category),
+        f"<b>Results for:</b> {session['query']} · {category.title()}{ad_text}",
+        reply_markup=keyboard,
     )
     await callback.answer()
 
