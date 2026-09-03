@@ -66,6 +66,7 @@ Send a title or filename in a group, or directly in DM when private search is en
 | `/removefile Search title` | Search, tap, then remove one record |
 | `/deletebyname text` | Remove records matching a title |
 | `/deleteolder DAYS` | Remove old records |
+| `/retention DAYS` · `/retention off` | Automatically remove old records once per day |
 | `/clearindex CONFIRM` | Clear the searchable index only |
 | `/autocleanup on|off` | Skip new CamRip / PreDVD / HDCam records |
 
@@ -175,5 +176,6 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 - Enable inline mode in BotFather with `/setinline` to use `@YourBot title` anywhere.
 - Free users can save up to 3 search alerts; premium users can save up to 20.
 - Free-user file-size rules apply to files indexed after this feature is deployed, because older records may not include Telegram’s file-size value.
+- Retention cleanup removes only old MongoDB index records; it never deletes the original Telegram channel posts.
 - Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
 - Only index and distribute files that you own or are authorized to share.

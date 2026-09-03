@@ -199,6 +199,11 @@ async def cleanup_settings() -> dict:
     return {"remove_low_quality": configured.get("remove_low_quality", False)}
 
 
+async def retention_settings() -> dict:
+    configured = await db.db.bot_settings.find_one({"_id": "retention"}) or {}
+    return {"days": configured.get("days", 0), "last_run_date": configured.get("last_run_date")}
+
+
 async def auto_reaction_settings() -> dict:
     configured = await db.db.bot_settings.find_one({"_id": "auto_reaction"}) or {}
     return {"enabled": configured.get("enabled", False), "emoji": configured.get("emoji", "👍")}
@@ -1848,6 +1853,31 @@ async def set_auto_cleanup(message: Message, command: CommandObject) -> None:
     await message.answer(f"✅ CamRip / PreDVD index cleanup is <b>{choice}</b> for newly posted files.")
 
 
+@router.message(Command("retention"))
+async def set_retention(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    raw = (command.args or "").strip().lower()
+    if not raw:
+        config = await retention_settings()
+        state = f"{config['days']} days" if config["days"] else "off"
+        await message.answer(f"Automatic old-file cleanup is <b>{state}</b>.\nUse <code>/retention 180</code> or <code>/retention off</code>.")
+        return
+    if raw == "off":
+        await db.db.bot_settings.update_one({"_id": "retention"}, {"$set": {"days": 0}}, upsert=True)
+        await message.answer("✅ Automatic old-file cleanup is off.")
+        return
+    try:
+        days = int(raw)
+        if not 1 <= days <= 3650:
+            raise ValueError
+    except ValueError:
+        await message.answer("Usage: <code>/retention DAYS</code> or <code>/retention off</code>\nExample: <code>/retention 180</code>")
+        return
+    await db.db.bot_settings.update_one({"_id": "retention"}, {"$set": {"days": days, "last_run_date": None}}, upsert=True)
+    await message.answer(f"✅ Files older than <b>{days} days</b> will be removed from the searchable index once per day.")
+
+
 @router.message(Command("panel"))
 async def panel(message: Message) -> None:
     if not is_owner(message.from_user.id):
@@ -2381,6 +2411,26 @@ async def scheduled_broadcast_worker(bot: Bot) -> None:
         await asyncio.sleep(20)
 
 
+async def retention_cleanup_worker(bot: Bot) -> None:
+    """Claim and run at most one automatic cleanup per local calendar day."""
+    while True:
+        now = datetime.now(timezone.utc)
+        local_day = now.astimezone(ZoneInfo(settings.timezone)).date().isoformat()
+        claimed = await db.db.bot_settings.find_one_and_update(
+            {"_id": "retention", "days": {"$gte": 1}, "last_run_date": {"$ne": local_day}},
+            {"$set": {"last_run_date": local_day, "last_run_at": now}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if claimed:
+            days = int(claimed["days"])
+            threshold = now - timedelta(days=days)
+            result = await db.db.files.delete_many({"created_at": {"$lt": threshold}})
+            await db.db.bot_settings.update_one({"_id": "retention"}, {"$set": {"last_removed_count": result.deleted_count}})
+            if result.deleted_count:
+                await log_index_cleanup(bot, f"Automatic retention cleanup removed <b>{result.deleted_count}</b> indexed file(s) older than <b>{days} days</b>.")
+        await asyncio.sleep(3_600)
+
+
 @router.callback_query(F.data.startswith("page:"))
 async def paginate(callback: CallbackQuery) -> None:
     _, session_id, raw_category, raw_page = callback.data.split(":")
@@ -2552,11 +2602,13 @@ async def main() -> None:
     dispatcher = Dispatcher()
     dispatcher.include_router(router)
     scheduler = asyncio.create_task(scheduled_broadcast_worker(bot))
+    retention_worker = asyncio.create_task(retention_cleanup_worker(bot))
     try:
         await dispatcher.start_polling(bot, allowed_updates=dispatcher.resolve_used_update_types())
     finally:
         scheduler.cancel()
-        await asyncio.gather(scheduler, return_exceptions=True)
+        retention_worker.cancel()
+        await asyncio.gather(scheduler, retention_worker, return_exceptions=True)
         await db.close()
         await bot.session.close()
 
