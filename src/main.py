@@ -599,7 +599,7 @@ async def delete_later(message: Message) -> None:
     await delete_message_later(message.bot, message.chat.id, message.message_id)
 
 
-async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
+async def announce_new_file(bot: Bot, record: dict, file_id: str, heading: str = "New in AkMovieVerse") -> None:
     """Publish a compact update only when a file is first added to the index."""
     if not settings.updates_channel_id:
         return
@@ -612,9 +612,9 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
     elif metadata:
         rating = metadata.get("rating")
         rating_text = f"\nRating: <b>{rating:.1f}/10</b>" if isinstance(rating, (int, float)) and rating else ""
-        text = f"<b>New in AkMovieVerse</b>\n\n<b>{escape(metadata['title'])}</b> ({metadata.get('year') or '—'})\nType: <b>{metadata.get('type', 'video').title()}</b>{rating_text}\n\n{escape(metadata.get('overview') or record['name'])[:500]}"
+        text = f"<b>{heading}</b>\n\n<b>{escape(metadata['title'])}</b> ({metadata.get('year') or '—'})\nType: <b>{metadata.get('type', 'video').title()}</b>{rating_text}\n\n{escape(metadata.get('overview') or record['name'])[:500]}"
     else:
-        text = f"<b>New in AkMovieVerse</b>\n\n{record['kind']} <b>{escape(record['name'])}</b>"
+        text = f"<b>{heading}</b>\n\n{record['kind']} <b>{escape(record['name'])}</b>"
     if caption_preview and not template_text:
         text += f"\n\n{caption_preview}"
     if tags:
@@ -625,12 +625,13 @@ async def announce_new_file(bot: Bot, record: dict, file_id: str) -> None:
             InlineKeyboardButton(text="🔎 Open in AkMovieVerse", url=f"https://t.me/{bot_username}?start=file_{file_id}")
         ]])
     try:
-        if metadata.get("poster_url"):
-            await bot.send_photo(settings.updates_channel_id, metadata["poster_url"], caption=text[:1024], reply_markup=keyboard)
+        poster = (record.get("custom_poster") or {}).get("file_id") or metadata.get("poster_url")
+        if poster:
+            await bot.send_photo(settings.updates_channel_id, poster, caption=text[:1024], reply_markup=keyboard)
         else:
             await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
     except Exception as error:
-        if metadata.get("poster_url"):
+        if (record.get("custom_poster") or {}).get("file_id") or metadata.get("poster_url"):
             try:
                 await bot.send_message(settings.updates_channel_id, text, reply_markup=keyboard)
                 return
@@ -1608,12 +1609,51 @@ async def apply_admin_file_action(callback: CallbackQuery) -> None:
     elif action["action"] == "remove":
         await db.db.files.delete_one({"_id": file["_id"]})
         result_text = f"✅ Removed <b>{escape(file['name'])}</b> from the searchable index."
+    elif action["action"] == "poster":
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+            InlineKeyboardButton(text="Portrait poster", callback_data=f"pstr:{action['_id']}:{file['_id']}:p"),
+            InlineKeyboardButton(text="Landscape banner", callback_data=f"pstr:{action['_id']}:{file['_id']}:l"),
+        ]])
+        await callback.message.edit_text(f"<b>{escape(file['name'])}</b> selected.\n\nChoose the poster orientation:", reply_markup=keyboard)
+        await callback.answer()
+        return
+    elif action["action"] == "clearposter":
+        await db.db.files.update_one({"_id": file["_id"]}, {"$unset": {"custom_poster": ""}})
+        result_text = f"✅ Custom poster removed for <b>{escape(file['name'])}</b>. TMDB or the normal post style will be used again."
     else:
         await callback.answer("Unsupported action.", show_alert=True)
         return
     await db.db.admin_file_actions.delete_one({"_id": action["_id"]})
     await callback.message.edit_text(result_text)
     await callback.answer("Done.")
+
+
+@router.callback_query(F.data.startswith("pstr:"))
+async def set_custom_poster_orientation(callback: CallbackQuery) -> None:
+    if not is_owner(callback.from_user.id):
+        await callback.answer("Owner only.", show_alert=True)
+        return
+    try:
+        _, action_id, file_id, raw_orientation = callback.data.split(":", 3)
+        action = await db.db.admin_file_actions.find_one({"_id": ObjectId(action_id), "owner_id": callback.from_user.id, "action": "poster"})
+        file = await db.db.files.find_one({"_id": ObjectId(file_id)})
+        orientation = {"p": "portrait", "l": "landscape"}[raw_orientation]
+        photo_id = action["payload"]["photo_id"]
+    except Exception:
+        action = file = None
+    if not action or not file:
+        await callback.answer("This poster picker expired or the file is unavailable. Send the poster again.", show_alert=True)
+        return
+    await db.db.files.update_one(
+        {"_id": file["_id"]},
+        {"$set": {"custom_poster": {"file_id": photo_id, "orientation": orientation, "set_at": datetime.now(timezone.utc)}}},
+    )
+    updated_file = await db.db.files.find_one({"_id": file["_id"]})
+    await db.db.admin_file_actions.delete_one({"_id": action["_id"]})
+    await callback.message.edit_text(f"✅ {orientation.title()} custom poster saved for <b>{escape(file['name'])}</b>.")
+    await callback.answer("Poster saved.")
+    if settings.updates_channel_id and updated_file:
+        await announce_new_file(callback.bot, updated_file, str(updated_file["_id"]), heading="AkMovieVerse cover update")
 
 
 @router.message(Command("recentfiles"))
@@ -1852,6 +1892,35 @@ async def index_channel_file(message: Message) -> None:
             {"_id": request["_id"]},
             {"$set": {"status": "fulfilled", "fulfilled_at": datetime.now(timezone.utc), "fulfilled_file_id": stored_file_id, "notified_users": delivered}},
         )
+
+
+@router.message(Command("setposter"), F.text)
+async def set_poster_help(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    await message.answer("Send the poster image to me in private chat with this as its caption:\n\n<code>/setposter Movie or series title</code>\n\nI will show matching files. Tap one, then choose portrait or landscape.")
+
+
+@router.message(F.chat.type == ChatType.PRIVATE, F.photo, F.caption.startswith("/setposter"))
+async def receive_custom_poster(message: Message) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    query = (message.caption or "").removeprefix("/setposter").strip()
+    if len(query) < 2:
+        await message.answer("Add the file title after the command, for example: <code>/setposter Avengers Endgame</code>")
+        return
+    await begin_admin_file_action(message, "poster", query, {"photo_id": message.photo[-1].file_id})
+
+
+@router.message(Command("clearposter"))
+async def clear_custom_poster(message: Message, command: CommandObject) -> None:
+    if not is_owner(message.from_user.id):
+        return
+    query = (command.args or "").strip()
+    if len(query) < 2:
+        await message.answer("Usage: <code>/clearposter Movie or series title</code>")
+        return
+    await begin_admin_file_action(message, "clearposter", query)
 
 
 @router.message(F.chat.type == ChatType.PRIVATE, F.document | F.video | F.audio | F.animation | F.photo)

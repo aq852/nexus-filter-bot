@@ -113,6 +113,8 @@ Send a title or filename in a group, or directly in DM when private search is en
 | `/setposttemplate movie\|series | template` | Save a branded movie or series update layout |
 | `/posttemplate on\|off` | Enable or disable custom update layouts |
 | `/clearposttemplate movie\|series` | Remove one saved update layout |
+| Send a photo with `/setposter Title` as caption | Search, tap, and set a custom portrait/landscape poster |
+| `/clearposter Title` | Search, tap, and remove a custom poster |
 
 ### Messaging & activity
 
@@ -166,6 +168,7 @@ Set the Web service’s public `https://…koyeb.app` address as `VERIFY_BASE_UR
 ## Notes
 
 - Configure TMDB credentials in Koyeb before using `/tmdb` or `/autometa on`. Automatic TMDB metadata applies only to newly indexed video files and creates rich update-channel posts when a match is found. Set movie and series post templates with `{title}`, `{year}`, `{rating}`, `{type}`, `{file_name}`, `{caption}`, `{overview}`, and `{tags}`; templates remain inactive until `/posttemplate on`. [TMDB authentication guide](https://developer.themoviedb.org/docs/authentication-application)
+- To override a poster for one file, send the image to the bot in private chat with `/setposter Movie Name` as its caption. Choose the matching title and portrait or landscape; no internal file ID is needed.
 - Enable inline mode in BotFather with `/setinline` to use `@YourBot title` anywhere.
 - Free users can save up to 3 search alerts; premium users can save up to 20.
 - Source and deletion actions affect the searchable MongoDB index unless Telegram deletion is explicitly stated.
