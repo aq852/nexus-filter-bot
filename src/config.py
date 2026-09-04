@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,18 @@ class Settings(BaseSettings):
     tmdb_read_access_token: str | None = None
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8")
+
+    @field_validator(
+        "force_sub_channel_id",
+        "storage_channel_id",
+        "updates_channel_id",
+        "deletion_log_channel_id",
+        mode="before",
+    )
+    @classmethod
+    def blank_optional_ids_are_disabled(cls, value: object) -> object:
+        """Treat blank values in a copied .env file as unset optional IDs."""
+        return None if isinstance(value, str) and not value.strip() else value
 
 
 @lru_cache
